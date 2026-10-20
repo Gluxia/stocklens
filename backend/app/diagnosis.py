@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from .errors import DiagnosisError
 from .fuyao import CONTRACT_URL, SourceResponse
 from .schemas import Diagnosis, Evidence, Metric, Source
+from .stocks import get_stock, verify_source_stock
 
 
 def identifier():
@@ -70,6 +71,7 @@ def validate_record(item, stock_code):
 
 
 def build_diagnosis(stock_code: str, response: SourceResponse) -> Diagnosis:
+    verify_source_stock(stock_code, response)
     data = response.payload.get("data")
     if not isinstance(data, dict) or not isinstance(data.get("item"), list):
         raise DiagnosisError("invalid_response", "Expected data.item to be a list.")
@@ -158,5 +160,4 @@ def build_diagnosis(stock_code: str, response: SourceResponse) -> Diagnosis:
 def validate_stock_code(stock_code):
     if not re.fullmatch(r"[0-9]{6}\.(SH|SZ|BJ)", stock_code):
         raise DiagnosisError("invalid_stock_code", "Expected a code such as 600519.SH.", 422)
-    if stock_code != "600519.SH":
-        raise DiagnosisError("unsupported_stock", "Phase 1 supports only 600519.SH.", 422)
+    get_stock(stock_code)

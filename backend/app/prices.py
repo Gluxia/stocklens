@@ -12,6 +12,7 @@ from .diagnosis import calculate, identifier, number
 from .errors import DiagnosisError
 from .fuyao import SourceResponse
 from .schemas import Evidence, Metric, Source
+from .stocks import verify_source_stock
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 PRICE_CONTRACT = 'https://fuyao.aicubes.cn/docs/api-reference/prices/'
@@ -60,6 +61,7 @@ def price_parameters(stock_code: str, start: date, end: date):
 
 
 def build_prices(stock_code: str, response: SourceResponse, start: date, end: date):
+    verify_source_stock(stock_code, response)
     result = PriceAnalysis(requested_start=str(start), requested_end=str(end), retrieved_at=response.retrieved_at)
     data = response.payload.get('data')
     if not isinstance(data, dict) or not isinstance(data.get('item'), list):

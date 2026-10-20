@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .research import Interpretation, ResearchReport, interpretation_catalog
+from .research import Interpretation, ResearchReport, interpretation_catalog, verify_report_stock
 
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ def validate_selection(content: str, catalog: list[Interpretation], report: Rese
 
 
 def add_interpretation(report: ResearchReport) -> ResearchReport:
+    verify_report_stock(report)
     catalog = interpretation_catalog(report)
     key = os.getenv("LLM_API_KEY", "").strip()
     model = os.getenv("LLM_MODEL", "").strip()

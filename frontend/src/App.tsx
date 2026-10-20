@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDownRight, ArrowRight, ArrowUpRight, BookOpen, Check, ChevronRight, CircleHelp, Clock3, Database, FileSearch, FlaskConical, Layers3, LoaderCircle, PanelRightOpen, ScanLine, Search, ShieldCheck, Sparkles, X } from 'lucide-react'
-import { reportEvidence, reportSources, fetchPlan, fetchResearch, formatDate, formatMetric, labels, reasonText, requestErrorText, type Evidence, type Plan, type ResearchReport } from './api'
+import { fetchStocks, type Stock, type StockCode, reportEvidence, reportSources, fetchPlan, fetchResearch, formatDate, formatMetric, labels, reasonText, requestErrorText, type Evidence, type Plan, type ResearchReport } from './api'
 import PriceSection from './PriceSection'
 import { researchFocus } from './presentation'
 import { dimensionLabels, dimensionReason, disclaimer, findingCopy, followUpText, freshnessText, interpretationStatus, interpretationText, metadataLabel, periodText, safetyNotice, sourceName, unitBasisText, unitText } from './zh-CN'
 
-const suggestions = ['贵州茅台过去一个月的股价表现如何？', '营业收入与净利润的同比增长表现有何差异？', '净利润率能说明什么？', '评估估值水平还缺少哪些证据？']
+const suggestions = ['过去一个月的股价表现如何？', '营业收入与净利润的同比增长表现有何差异？', '净利润率能说明什么？', '评估估值水平还缺少哪些证据？']
 const categories = [
   { id: 'positive', title: '正面证据', subtitle: '有数据支持的上升变化', icon: ArrowUpRight },
   { id: 'negative', title: '负面证据', subtitle: '有数据支持的下降变化', icon: ArrowDownRight },
@@ -45,6 +45,15 @@ function EvidenceDrawer({ report, ids, title, description, close }: { report: Re
 }
 
 export default function App() {
+  const [stocks, setStocks] = useState<Stock[]>([])
+  const [stockCode, setStockCode] = useState<StockCode>('600519.SH')
+  const stock = stocks.find(item => item.stock_code === stockCode)
+  const [catalogError, setCatalogError] = useState<string | null>(null)
+  useEffect(() => {
+    const request = new AbortController()
+    void fetchStocks(request.signal).then(setStocks).catch(failure => { if (!request.signal.aborted) setCatalogError(requestErrorText(failure)) })
+    return () => request.abort()
+  }, [])
   const [question, setQuestion] = useState('')
   const [report, setReport] = useState<ResearchReport | null>(null)
   const [plan, setPlan] = useState<Plan | null>(null)
@@ -55,7 +64,13 @@ export default function App() {
   const resultHeading = useRef<HTMLHeadingElement>(null)
   const busy = phase !== 'idle'
   useEffect(() => () => controller.current?.abort(), [])
+  function selectStock(code: StockCode) {
+    controller.current?.abort()
+    controller.current = null
+    setStockCode(code); setQuestion(''); setReport(null); setPlan(null); setError(null); setDrawer(null); setPhase('idle')
+  }
   async function research(input = question) {
+    if (!stock) return
     const value = input.trim()
     if (!value) { setError('请输入研究问题。'); return }
     controller.current?.abort()
@@ -64,13 +79,15 @@ export default function App() {
     const timeout = window.setTimeout(() => current.abort(), 65000)
     setQuestion(value); setReport(null); setPlan(null); setDrawer(null); setError(null); setPhase('plan')
     try {
-      const nextPlan = await fetchPlan(value, current.signal)
-      if (current.signal.aborted) return
+      const nextPlan = await fetchPlan(value, current.signal, stockCode)
+      if (current.signal.aborted || controller.current !== current) return
+      if (nextPlan.company_name !== stock.name || nextPlan.company_type !== stock.company_type) throw new Error('研究计划公司信息与股票目录不一致。')
       setPlan(nextPlan); setPhase('diagnose')
-      const nextReport = await fetchResearch(value, current.signal)
-      if (current.signal.aborted) return
+      const nextReport = await fetchResearch(value, current.signal, stockCode)
+      if (current.signal.aborted || controller.current !== current) return
+      if (nextReport.plan.company_name !== stock.name || nextReport.plan.company_type !== stock.company_type) throw new Error('报告公司信息与股票目录不一致。')
       setReport(nextReport); setPlan(nextReport.plan)
-      window.setTimeout(() => resultHeading.current?.focus(), 0)
+      window.setTimeout(() => { if (controller.current === current && !current.signal.aborted) resultHeading.current?.focus() }, 0)
     } catch (failure) {
       if (controller.current !== current) return
       setError(current.signal.aborted ? '请求超时，本次未生成报告，请重试。' : requestErrorText(failure))
@@ -94,7 +111,7 @@ export default function App() {
       <div className="workspace-label">研究工作台</div>
       <a className="nav-item active" href="#ask"><Search size={18} />个股研究<span className="nav-dot" /></a>
       <a className="nav-item" href="#method"><BookOpen size={18} />研究方法</a>
-      <div className="sidebar-note"><div className="tiny-logo"><ShieldCheck size={20} /></div><h3>以证据为先。</h3><p>每个数值都有来源，每项解读都有边界。</p><div className="flex items-center gap-2"><span className="status-dot" /> 单只股票试用版</div></div>
+      <div className="sidebar-note"><div className="tiny-logo"><ShieldCheck size={20} /></div><h3>以证据为先。</h3><p>每个数值都有来源，每项解读都有边界。</p><div className="flex items-center gap-2"><span className="status-dot" /> 三股票白名单试用版</div></div>
       <div className="sidebar-footer"><div className="avatar">SL</div><div>StockLens 研究室<small>A 股研究</small></div><span className="pill">试用版</span></div>
     </aside>
     <div className="main-shell">
@@ -104,15 +121,22 @@ export default function App() {
         <section className="research-box" aria-label="研究输入">
           <div className="research-box-top"><span className="research-label"><Sparkles size={17} /> 从这里开始研究</span><span className="pill">A 股 · 财务与历史价格</span></div>
           <form onSubmit={event => { event.preventDefault(); void research() }}>
-            <label className="sr-only" htmlFor="stock">选择股票</label><div className="stock-row"><div className="company-monogram">茅</div><select id="stock" aria-label="选择股票" disabled={busy}><option value="600519.SH">贵州茅台 · 600519.SH</option></select><span className="stock-exchange">上海证券交易所</span></div>
+            <label className="sr-only" htmlFor="stock">选择股票</label><div className="stock-row"><div className="company-monogram">{stock?.name.slice(0, 1) ?? '股'}</div><select id="stock" aria-label="选择股票" value={stockCode} disabled={!stocks.length} onChange={event => selectStock(event.target.value as StockCode)}>{stocks.length ? stocks.map(item => <option key={item.stock_code} value={item.stock_code}>{item.name} · {item.stock_code}</option>) : <option value="600519.SH">正在加载股票目录…</option>}</select><span className="stock-exchange">{stock?.exchange ?? '交易所待加载'}</span></div>
             <label className="sr-only" htmlFor="question">研究问题</label><textarea id="question" value={question} onChange={event => setQuestion(event.target.value)} placeholder="关于这家企业，你希望了解什么？" maxLength={1000} rows={2} disabled={busy} />
-            <div className="input-footer"><span><ShieldCheck size={14} /> 客观计算有依据，分析解读可追溯。</span><button className="primary-button" disabled={busy || !question.trim()} type="submit">{busy ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{busy ? '研究中…' : '开始研究'}</button></div>
+            <div className="input-footer"><span><ShieldCheck size={14} /> 客观计算有依据，分析解读可追溯。</span><button className="primary-button" disabled={busy || !question.trim() || !stock} type="submit">{busy ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{busy ? '研究中…' : '开始研究'}</button></div>
           </form>
           <div className="suggestions"><span>试着提问</span>{suggestions.map(item => <button disabled={busy} key={item} onClick={() => { setQuestion(item); document.getElementById('question')?.focus() }}>{item}<ArrowUpRight size={12} /></button>)}</div>
         </section>
         <div className="journey" aria-label="研究流程">{['提问', '规划', '诊断', '核验', '探索'].map((step, index) => <div key={step} className={(report || index === 0 || (plan && index <= 2)) ? 'reached' : ''}><span>{report && index < 3 ? <Check size={12} /> : `0${index + 1}`}</span>{step}{index < 4 && <div className="journey-line" />}</div>)}</div>
+        {catalogError && <div role="alert" className="error-box">{catalogError}</div>}
         {error && <div role="alert" className="error-box"><CircleHelp size={20} /><div><h3>本次研究未能完成</h3><p>{error}</p><button className="text-link" disabled={busy} onClick={() => void research()}>重试 <ArrowRight size={14} /></button></div></div>}
-        {plan && <section className="plan-section" aria-label="研究计划"><div className="section-kicker">01 / 规划</div><div className="section-heading"><h2>围绕问题，明确研究重点</h2><span className="pill">基于规则选择维度</span></div><p className="muted text-sm">贵州茅台 · 非金融企业。当前为单只股票预设研究范围，未接入自动行业分类。</p><div className="dimension-grid">{plan.dimensions.map(item => <article key={item.id}><div className="flex items-center justify-between"><h3>{dimensionLabels[item.id] ?? '待核验维度'}</h3><span className={item.availability === 'available' ? 'availability' : 'muted text-xs'}>{item.availability === 'available' ? (item.id === 'price' ? '历史日线价格' : '年度财务背景') : '暂不可用'}</span></div><p>{dimensionReason(item)}</p></article>)}</div>{plan.safety_notice && <div className="notice">{safetyNotice}</div>}</section>}
+        {plan && <section className="plan-section" aria-label="研究计划"><div className="section-kicker">01 / 规划</div><div className="section-heading"><h2>围绕问题，明确研究重点</h2><span className="pill">基于规则选择维度</span></div><div className="muted text-sm" aria-label="公司分类与诊断重点">
+          <p><strong>公司名称：</strong><span>{plan.company_name}</span></p>
+          <p><strong>研究分类：</strong><span>{plan.company_type}</span></p>
+          <p><strong>分类依据：</strong>{plan.company_type_basis} <a href={plan.classification_source_url} target="_blank" rel="noreferrer">{plan.classification_source}</a></p>
+          <p><strong>当前诊断重点：</strong>{plan.dimensions.filter(item => item.availability === 'available').map(item => dimensionLabels[item.id] ?? '待核验维度').join('、') || '暂无已支持维度'}{plan.dimensions.some(item => item.availability === 'unavailable') && '；未支持的维度见下方待验证说明。'}</p>
+          <p>研究分类由人工审阅公开业务资料设置，不是自动行业识别或官方行业分类。</p>
+        </div><div className="dimension-grid">{plan.dimensions.map(item => <article key={item.id}><div className="flex items-center justify-between"><h3>{dimensionLabels[item.id] ?? '待核验维度'}</h3><span className={item.availability === 'available' ? 'availability' : 'muted text-xs'}>{item.availability === 'available' ? (item.id === 'price' ? '历史日线价格' : '年度财务背景') : '暂不可用'}</span></div><p>{dimensionReason(item)}</p></article>)}</div>{plan.safety_notice && <div className="notice">{safetyNotice}</div>}</section>}
         {busy && <section role="status" className="loading-state"><LoaderCircle className="spin" size={23} /><div><h3>{phase === 'plan' ? '正在选择相关研究维度' : '正在获取财务报表并核验证据'}</h3><p>获取真实财务数据 → 精确计算指标 → 核验证据 → 按配置提供 AI 解读，不使用占位财务结果。</p></div></section>}
         {report && diagnosis && <div className="report" id="report">
           <div className="report-top"><div><div className="section-kicker">02 / 诊断</div><h2 ref={resultHeading} tabIndex={-1}>个股研究简报</h2><p className="report-question">“{report.question}”</p></div><span className="report-status"><span className="status-dot" />{focus === 'price' ? (report.price_analysis?.observations.length ? '历史价格已获取 · 覆盖范围待核验' : '历史价格暂不可用') : diagnosis.status === 'complete' ? '财务指标已获取' : diagnosis.status === 'partial' ? '部分财务证据可用' : '财务数据暂不可用'}</span></div>

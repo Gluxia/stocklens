@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from .schemas import Diagnosis
 from .prices import PriceAnalysis
+from .stocks import get_stock
+from .errors import DiagnosisError
 
 
 class ResearchRequest(BaseModel):
@@ -31,9 +33,12 @@ class Dimension(BaseModel):
 
 
 class Plan(BaseModel):
-    company_name: str = "Kweichow Moutai"
-    company_type: str = "Non-financial operating company"
-    company_type_basis: str = "Reviewed MVP scope for the single supported company; not an automated industry classification."
+    stock_code: str
+    classification_source: str
+    classification_source_url: str
+    company_name: str
+    company_type: str
+    company_type_basis: str
     routing_method: str = "Deterministic keyword rules; English and Chinese"
     dimensions: list[Dimension]
     safety_notice: str | None = None
@@ -76,12 +81,14 @@ DIMENSIONS = {
     "profitability": ("Profitability", ("profit", "margin", "earnings", "利润", "盈利", "净利"), True),
     "valuation": ("Valuation", ("valuation", "value", "cheap", "expensive", "p/e", " pe ", "估值", "便宜", "贵吗", "太贵", "昂贵"), False),
     "price": ("Price behavior", ("price", "trend", "momentum", "股价", "走势", "行情", "涨跌", "价格"), True),
+    "manufacturing": ("Manufacturing evidence", ("研发", "产能", "销量", "订单", "制造", "r&d", "capacity", "production", "deliveries"), False),
     "quality": ("Earnings quality & resilience", ("cash", "debt", "quality", "risk", "现金", "负债", "质量", "风险"), False),
 }
 SAFETY_TERMS = ("buy", "sell", "guarantee", "guaranteed", "should i invest", "recommend", "target price", "买", "卖", "荐股", "保本", "稳赚", "保证收益")
 
 
-def make_plan(question: str) -> Plan:
+def make_plan(question: str, stock_code: str = "600519.SH") -> Plan:
+    stock = get_stock(stock_code)
     text = question.casefold()
     sensitive = any(term in text for term in SAFETY_TERMS)
     selected = [key for key, (_, keywords, _) in DIMENSIONS.items() if any(word in text for word in keywords)]
@@ -89,10 +96,12 @@ def make_plan(question: str) -> Plan:
         selected.remove("price")
         selected.insert(0, "price")
     if not selected:
-        selected = ["growth", "profitability"]
+        selected = list(stock.default_dimensions)
         reason = "No specific supported dimension matched; the default annual operating-performance review was selected."
     else:
         reason = None
+    if "manufacturing" in stock.default_dimensions and any(key in selected for key in ("growth", "profitability")) and "manufacturing" not in selected:
+        selected.append("manufacturing")
     dimensions = [Dimension(
         id=key, label=DIMENSIONS[key][0],
         reason=reason or f"The question matched {DIMENSIONS[key][0].lower()} keywords.",
@@ -102,7 +111,14 @@ def make_plan(question: str) -> Plan:
         for key in ("growth", "profitability"):
             if key not in selected:
                 dimensions.append(Dimension(id=key, label=DIMENSIONS[key][0], reason=("Included as annual financial context alongside historical prices; no causal link is established." if "price" in selected and all(DIMENSIONS[k][2] for k in selected) else "Included as available annual financial context; it cannot answer the requested unavailable dimension."), availability="available"))
-    return Plan(dimensions=dimensions, safety_notice=(
+    for dimension in dimensions:
+        if reason and "manufacturing" in stock.default_dimensions:
+            dimension.reason = f"公司类型默认关注：{stock.company_type}；{dimension.id}。制造业专属指标尚未接入。"
+        elif dimension.id == "manufacturing" and not any(word in text for word in DIMENSIONS["manufacturing"][1]):
+            dimension.reason = f"公司类型补充关注：{stock.company_type}；制造业专属指标尚未接入。"
+    return Plan(stock_code=stock_code, company_name=stock.name, company_type=stock.company_type,
+        company_type_basis=stock.classification_basis, classification_source=stock.source,
+        classification_source_url=stock.source_url, dimensions=dimensions, safety_notice=(
         "This question requests an investment action or certainty. StockLens provides factual research only and will not recommend trades or guarantee returns."
         if sensitive else None
     ))
@@ -120,7 +136,11 @@ def freshness(diagnosis: Diagnosis, now: datetime):
 
 
 def factual_report(request: ResearchRequest, diagnosis: Diagnosis, now: datetime | None = None) -> ResearchReport:
-    plan = make_plan(request.question)
+    if request.stock_code != diagnosis.stock_code:
+        raise DiagnosisError("stock_mismatch", "Diagnosis does not match the research request.")
+    if any(s.parameters.get("thscode") != request.stock_code for s in diagnosis.sources):
+        raise DiagnosisError("stock_mismatch", "Diagnosis source belongs to a different stock.")
+    plan = make_plan(request.question, request.stock_code)
     selected = {dimension.id for dimension in plan.dimensions}
     findings = []
     observations = []
@@ -213,6 +233,8 @@ def interpretation_catalog(report: ResearchReport) -> list[Interpretation]:
 
 
 def attach_prices(report: ResearchReport, prices: PriceAnalysis):
+    if any(s.parameters.get("thscode") != report.diagnosis.stock_code for s in prices.sources):
+        raise DiagnosisError("stock_mismatch", "Price evidence belongs to a different stock.")
     report.price_analysis = prices
     price_observations = []
     for metric in prices.metrics:
@@ -230,5 +252,14 @@ def attach_prices(report: ResearchReport, prices: PriceAnalysis):
             report.findings.insert(0, finding)
     report.observations = price_observations + report.observations
     report.findings.append(Finding(id="price_coverage", category="unknown", kind="limitation", title="历史价格覆盖范围", text="未核验完整交易日历，仅对返回的有效观测计算；请求区间不等于完整交易区间。", evidence_ids=[m.evidence_id for m in prices.metrics], dimension="price"))
-    report.follow_up_questions.insert(0, "贵州茅台过去一个月的股价表现如何？")
+    report.follow_up_questions.insert(0, "过去一个月的股价表现如何？")
     return report
+
+
+def verify_report_stock(report: ResearchReport):
+    code = report.diagnosis.stock_code
+    if report.plan.stock_code != code:
+        raise DiagnosisError("stock_mismatch", "Research plan and diagnosis stock differ.")
+    sources = report.diagnosis.sources + (report.price_analysis.sources if report.price_analysis else [])
+    if any(source.parameters.get("thscode") != code for source in sources):
+        raise DiagnosisError("stock_mismatch", "Research source stock does not match diagnosis.")
