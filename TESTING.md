@@ -1,201 +1,153 @@
-# Testing StockLens
+# StockLens 测试与验证记录
 
-All automated financial fixtures are synthetic test values, not Kweichow Moutai
-results. No automated test calls a paid provider. The original root smoke scripts
-remain untouched and are excluded by `pytest.ini`.
+<a id="latest-release-validation-2026-10-21"></a>
+## 最新交付验证（2026-10-21）
 
-## Run
+Phase 2 已合并到 `main`，负责人确认更新后的[公网演示](https://stocklens-bv4o.onrender.com)展示正常。
 
-From the project root after installing dependencies:
+| 检查项 | 最近已执行记录 |
+| --- | --- |
+| 完整后端测试 | **172 项通过** |
+| 前端测试 | **32 项通过** |
+| 独立 TypeScript 检查 | **通过**，在 `frontend/` 执行 `npx tsc --noEmit` |
+| 生产构建 | **通过**，执行 `npm --prefix frontend run build` |
+| 源码与浏览器产物凭据扫描 | 未发现已配置密钥值或凭据格式匹配 |
+
+以上是此前实际执行的发布验证，不表示本次文档修改重新运行了测试。历史阶段的不同计数保留在后文，不累加为当前测试数。自动化财务样本均为合成测试值，不是真实贵州茅台结果；测试套件不调用付费供应商。原始根目录烟测脚本未修改，由 `pytest.ini` 排除。
+
+### 已确认的公网展示
+
+负责人报告公网页面可见历史行情图及日期／数据背景、财务背景、已核验 AI 解读，以及正面、负面、矛盾与混合、未知证据分类。
+
+这是负责人确认的视觉展示，证据范围类似截图检查；本代理没有独立审阅附加截图，文档也未附截图。标签可见不独立证明实时 Schema 校验、数值正确或各类别都有内容；相关边界由下述测试和有限真实检查补充。空类别不表示需要编造证据填充。
+
+<a id="interactions-still-requiring-manual-checks"></a>
+### 尚需浏览器人工交互检查
+
+- 图表 tooltip，以及桌面、平板、手机宽度的溢出和布局。
+- 折叠区键盘控制、证据抽屉 Escape／关闭及焦点恢复。
+- 从公式逐步点击原始输入记录的真实浏览器操作。
+- 点击后续问题后，新的问题、计划及真实诊断请求完成的端到端流程。
+- 真实供应商中断／额度场景的线上表现，以及 Gemini 持续可用性。
+
+自动交互和回退测试使用 mock，不能替代上述浏览器检查。负责人此前已批准本地 UI，但最终验证时本代理未发现可连接的自动化浏览器。确定性回退是预期行为；公开限流和缓存仍未实现。
+
+## 测试环境与运行方法
+
+已有记录使用 Python 3.13 验证；项目运行要求为 Python 3.10+、Node 22.12+ 或 24。后端使用 pytest 与 FastAPI TestClient；前端使用 Vitest、Testing Library、jsdom；图表测试模拟 ResizeObserver。安装方法见 [README.md](README.md#本地安装与运行)。
+
+从根目录、完成依赖安装后执行：
 
 ```sh
 source .venv/bin/activate
+npm --prefix frontend run build
 python -m pytest -q
 python -m pip check
 npm --prefix frontend test
-npm --prefix frontend run build
 ```
 
-Build the frontend before the backend test run to include production asset-serving
-checks. `npm run build` performs strict TypeScript checking and a Vite production
-build. Frontend interaction tests use Vitest, Testing Library and jsdom.
+先构建前端，使后端测试可包含生产静态资源服务检查。`npm run build` 包含严格 TypeScript 检查与 Vite 构建；独立类型检查可在 `frontend/` 中执行 `npx tsc --noEmit`。
 
-## Coverage
+<a id="submission-test-coverage-and-evidence-types"></a>
+## 主链路、失败场景与证据类型
 
-Backend tests cover Decimal calculations and parsing, missing/zero/negative inputs,
-invalid numeric types, annual period validation, units, stock mismatches, duplicate
-years, nonconsecutive years, empty statements, response envelopes, business/HTTP
-errors, sanitized failures, and query validation. New tests cover question routing
-in English/Chinese, mixed evidence, unknown dimensions, stale periods, buy/sell and
-guarantee requests, valid/invalid model selections, injection-resistant prompt inputs,
-fallback on timeout/refusal/truncation, full research/follow-up endpoint calls, and
-production static-asset serving.
+| 场景 | 已有覆盖或验证 | 边界 |
+| --- | --- | --- |
+| Ask → Plan → Diagnose → Verify → Explore | 后端 API 与前端测试覆盖提问、计划、报告、输入证据导航、点击后续问题重新请求 | jsdom／mock 不证明一次新的公网调用真实完成 |
+| 财务问题：“贵州茅台的营收和净利润增长表现有何差异？” | 指标和跨指标比较测试；有限真实验证按原始 JSON 路径复算并检查两项引用 | 年度数据可能过时，不构成同行评价或因果解释 |
+| 股价问题：“贵州茅台过去一个月的股价表现如何？” | 真实 Fuyao Schema 和观测验证；涨跌幅、高低价、计数、日期／复权、图表存在及抽屉测试 | 公网图表已由负责人确认，完整交易日覆盖仍未核验 |
+| 综合问题：“贵州茅台的经营表现与近期股价变化是否一致？” | 前端同时展开两部分；目录分离年度与日线证据 | 不同报告期不能视作同期相关性或因果研究 |
+| 缺失或异常数据 | 缺字段／年份、无效数字及 OHLC、零／负基数、重复年／日期、空／单条行情、身份和单位不符 | 不生成替代数据或虚假图表 |
+| API 故障 | mock 覆盖 HTTP 429、超时、HTTP／网络错误、财务与价格独立失败；保留真实额度失败记录 | 健康端点与 mock 不保证供应商在线 |
+| AI 输出异常 | 未知／重复 ID、引用缺失或乱序、额外文案、畸形／截断／拒绝输出、近似文字、脱敏日志 | 不合格输出保持确定性事实，不伪装 AI 成功 |
+| 合规边界 | 买卖、目标价、保证收益问题，如 “Should I buy? Guarantee a return.”、“稳赚吗” | 关键词检测不是完整语言理解；固定目录仍禁止交易建议和保证收益 |
+| 人工审阅与 AI 辅助 | 负责人提出约束、要求纠错、批准 UI；Codex 辅助实现、调试和测试 | 不声称独立手写全部代码、候选人逐项审计或完成未记录交互 |
 
-Frontend tests cover an empty initial page, suggested questions, Ask → Plan →
-Diagnose → Verify → Explore navigation, source input drill-down, deterministic vs
-AI mode labels, missing data, empty evidence, invalid references, server errors,
-network failure, unsupported-stock responses, retry, and loading.
+后端还覆盖 Decimal 解析、极端数值与类型、年度期间、币种、股票不符、非相邻年份、响应信封、业务错误、查询校验、时效性、提示注入输入、静态资源等。前端覆盖初始空状态、建议问题、重试、加载、无证据、错误引用、服务器／网络失败和不支持股票。
 
-## Manual/live smoke checks
+AI 工具、人工纠错与验证边界详见 [AI_USAGE_AND_VALIDATION.md](AI_USAGE_AND_VALIDATION.md#development-assistance-and-documented-human-review)。
 
-1. Start the built app and open its root URL.
-2. Ask “Compare revenue and profit growth.” Verify actual API-derived values,
-   periods, source, retrieval time, and financial report status.
-3. Click revenue growth, inspect the formula, then click each input. Confirm the
-   field, JSON path, original value/unit, period, timestamp, and raw JSON.
-4. Ask about valuation; verify its unavailability is explicit rather than filled
-   with assumed multiples or price judgments.
-5. Click a follow-up and verify the question and plan change.
-6. Ask “Should I buy? Guarantee a return.” Verify factual-only reframing.
-7. Test missing provider credentials or a stopped backend; verify an error and no
-   invented report. Test no AI key; verify deterministic mode.
-8. Test keyboard focus, Escape/close in the native modal, and narrow screens.
+## 手工烟测步骤（检查清单，不代表全部已执行）
 
-## Results for this implementation
+1. 启动已构建应用，打开首页。
+2. 输入 “Compare revenue and profit growth.”，核对真实值、报告期、来源、获取时间与财务状态。
+3. 点击营业收入增长、公式及各输入，检查字段、JSON 路径、原值／单位、期间、时间戳和原始 JSON。
+4. 询问估值，确认未支持时明确提示缺证据，不填充假定倍数或价格判断。
+5. 点击后续问题，确认问题与计划更新并重新诊断。
+6. 输入 “Should I buy? Guarantee a return.”，确认仅展示事实与边界。
+7. 在受控本地环境测试缺供应商凭据／后端停止、无 AI key，确认错误或确定性回退，不生成虚假报告。
+8. 检查键盘焦点、原生模态 Escape／关闭和窄屏布局。
 
-- Backend: 107 tests passed (includes the original 64 tests).
-- Frontend: 21 tests passed (13 interaction tests and 8 localization/formatting checks).
-- Strict TypeScript check and production build passed.
-- Additional live/schema/deployment checks are recorded below after validation.
+## 历史开发与验证记录
 
-Known non-failing warnings: the installed Starlette TestClient deprecates its httpx
-adapter; Vite/Rollup removes two unrecognized purity annotations from dependency
-comments. These do not fail the checks. Browser plugin discovery returned no
-connected browsers, so visual browser QA and real-browser keyboard/mobile checks
-could not be completed in this session. jsdom interaction tests are not a substitute
-for rendered visual QA. A cloud deployment is prepared, not performed.
+以下按原阶段保留，不用当前结果改写旧实验。早期未配置 AI、未初始化／推送 Git 或尚未部署，只描述当时状态，已由本页顶部的交付状态取代。真实调用有成有败，均不证明持续可用。
 
-### Live checks in this session
+### 初始实现与本地限制
 
-- The combined FastAPI process served `/api/health` and the built root HTML.
-- An authenticated read-only Fuyao check returned HTTP **429** and business code
-  **429** (provider rate limit/quota). No financial values were substituted.
-- An explicit `upstream_rate_limited` response was added for that condition.
-- Live AI was not exercised: the optional key/model pair is not configured.
-- Docker CLI exists, but its daemon socket is unavailable. The image build/run
-  was therefore not validated here; application static serving was tested directly.
-- Installed dependency consistency check passed. A scan against configured local
-  credential values found zero matches in compiled frontend assets, and example
-  API-key values are blank.
+- 后端 **107 项通过**，包含最初 64 项；前端 **21 项通过**，其中 13 项交互、8 项中文化／格式检查；严格 TypeScript 与构建通过。
+- Starlette TestClient 的 httpx adapter 存在弃用告警；Vite/Rollup 移除依赖中的两个不可识别纯度注释，不导致失败。
+- 当时无可连接浏览器，未完成真实键盘／移动端视觉检查；jsdom 不是视觉验收替代品。当时仅准备云部署，尚未执行。
 
-### Simplified Chinese localization checks
+### 初期真实接口及环境检查
 
-The frontend suite verifies Chinese navigation, terminology, planning, errors,
-follow-up requests, compliance notices, constrained interpretation translation,
-unknown-template fallback, UTF-8 metadata and `zh-CN`. Precision tests cover negative,
-zero, small and large Decimal values, rounded narrative text, exact evidence values,
-and unmodified API objects. All original research, retry, loading, missing-data,
-reference-validation, and drill-down interactions remain covered. TypeScript
-checking and the production build also pass. CJK font fallbacks, wrapping, flexible
-card headers and responsive heading sizing were added without changing the palette
-or layout structure. Browser discovery still returned no connected browsers, so
-rendered desktop/mobile overflow cannot be visually certified in this session.
+- 组合 FastAPI 进程提供 `/api/health` 与已构建首页 HTML。
+- 带认证、只读的 Fuyao 检查返回 HTTP **429**、业务码 **429**，未替换任何财务值；实现加入 `upstream_rate_limited` 处理。
+- 当时未配置可选 AI key/model，未执行真实 AI。
+- Docker CLI 存在，但 daemon socket 不可用，因此未实际构建／运行镜像；直接测试了应用静态服务。
+- 安装依赖一致性通过，编译前端未匹配到本地已配置凭据值，示例 key 留空。
 
-### Gemini compatibility verification
+### 简体中文界面验证
 
-Five Gemini-specific contract/failure tests were added; the full backend suite
-passed with 104 tests. Exactly one live LLM call used explicitly marked synthetic
-evidence and returned HTTP 404 with no parseable response.
-`interpretation_mode="llm"` was **not achieved** in the live call. The report
-remained deterministic with zero accepted interpretations. No production request
-parameters were changed based on this inconclusive failure. See
-AI_USAGE_AND_VALIDATION.md for provider documentation and verification limits.
+前端测试覆盖导航、术语、计划、错误、后续请求、合规提示、已知解读映射、未知模板回退、UTF-8 和 `zh-CN`。精度测试覆盖负数、零、小数、大 Decimal、摘要舍入、证据完整精度及原 API 对象不变。研究、重试、加载、缺数据、引用和抽屉保持覆盖，TypeScript／构建通过。CJK 字体回退、换行、灵活卡片与响应式标题已加入；该阶段仍无浏览器连接，未声称真实桌面／手机无溢出。
 
-### Confirmed Gemini model migration (2026-10-20)
+### Gemini 兼容性首次验证
 
-This follow-up supersedes the earlier unsuccessful Gemini 2.5 live check.
-Google's official `/v1beta/models` returned HTTP 200 with 63 models, including
-`gemini-3.5-flash-lite`. That model passed a minimal unstructured Chat Completions
-request (HTTP 200, expected OK response). Only after that succeeded was the
-unchanged StockLens strict JSON Schema request exercised: HTTP 200,
-`finish_reason=stop`, `strict=true`, `max_completion_tokens=1000`, and three
-accepted interpretations with `interpretation_mode="llm"`.
+新增 5 项 Gemini 契约／失败测试，该阶段后端 **104 项通过**。仅一次真实 LLM 请求使用明确标记的合成证据，返回 HTTP 404，响应不可解析；**未达到** `interpretation_mode="llm"`，接受零项解读并保持 deterministic。未依据此不确定失败修改生产参数。详见 [AI 实验记录](AI_USAGE_AND_VALIDATION.md)。
 
-The local `.env` then changed only `LLM_MODEL` to `gemini-3.5-flash-lite`; all
-other parsed variables and key values were verified unchanged. The Gemini
-request-contract regression test now covers both the legacy and selected model.
-The full backend suite passed: **105 tests**.
+### Gemini 替代模型确认（2026-10-20）
 
-Finally, one complete `POST /api/research` request used **real Fuyao financial
-data** and the selected Gemini model. The research endpoint and LLM both returned
-HTTP 200. Financial status was `complete`, `interpretation_mode="llm"`, and all
-three accepted interpretations referenced available evidence. No financial values,
-credentials, sensitive headers, or raw provider errors were printed. No billing
-settings, production request parameters, financial formulas, frontend components,
-evidence validation, or fallback rules changed.
+- 官方 `/v1beta/models` 返回 HTTP 200、63 个模型，包含 `gemini-3.5-flash-lite`。最小非结构化 Chat Completions 返回 HTTP 200 和预期 OK。
+- 仅在基本调用成功后测试原有 strict JSON Schema，得到 HTTP 200、`finish_reason=stop`、`strict=true`、`max_completion_tokens=1000`，接受三项解读并达到 `interpretation_mode="llm"`。
+- 之后只修改本地 `LLM_MODEL`，其他解析变量和 key 不变；mock 契约覆盖旧／新模型，该阶段后端 **105 项通过**。
+- 随后完整 `POST /api/research` 使用真实 Fuyao 财务与所选模型，研究和 LLM 均 HTTP 200；财务状态 `complete`，三项解读引用可用证据。
+- 未输出财务值、凭据、敏感请求头或供应商原始错误；未更改计费、生产请求参数、财务公式、前端、证据验证和回退规则。
 
-### Render readiness review
+### Render 就绪审阅（历史阶段）
 
-- 107 backend tests passed, including new provider-free health and HTTP 429
-  research-flow tests. The quota failure does not call the model. Existing model
-  timeout/refusal/malformed-output/evidence-validation fallback tests passed.
-- 21 frontend tests and the TypeScript/Vite production build passed.
-- `pip check` found no broken requirements.
-- Git ignore rules passed 15 representative sensitive-path checks in an isolated
-  temporary repository; the project itself was not initialized, committed or pushed.
-- Configured local API-key values had zero matches in checked backend/frontend
-  source, compiled frontend assets, README, example environment file, Dockerfile
-  and Render configuration. Example key values remain blank.
-- Dockerfile inspection confirmed the multistage frontend build, copied dist
-  assets, dynamic PORT, 0.0.0.0 binding, non-root runtime and health command.
-  Docker daemon was unavailable; no actual container build/run was claimed.
-- The Render Blueprint now uses the live-verified Gemini model and endpoint and
-  prompts privately for both keys. No Render deployment or push was performed.
+- 后端 **107 项**、前端 **21 项**、TypeScript／Vite 构建通过；健康端点不调用供应商，429 路径不请求模型。原超时、拒绝、畸形输出和证据回退测试通过。
+- `pip check` 无依赖冲突；隔离临时仓库验证 15 个敏感路径的忽略规则。当时项目本身尚未初始化、提交或推送。
+- 后端／前端源码、编译产物、README、示例环境、Dockerfile、Render 配置未发现本地 key 值；示例 key 留空。
+- 静态审阅确认前端多阶段构建、复制 dist、动态 `PORT`、`0.0.0.0`、非 root 和健康命令；daemon 不可用，未声称实际容器测试。
+- Blueprint 使用已实测模型及端点，并私密接收 key；该次审阅未部署或推送。
 
-## Phase 2 historical prices
+### Phase 2 历史行情初验
 
-Run `.venv/bin/python -m pytest backend/tests -q`, then in `frontend/` run
-`npm test`, `npx tsc --noEmit`, and `npm run build`.
+运行记录使用 `.venv/bin/python -m pytest backend/tests -q`，并在 `frontend/` 执行 `npm test`、`npx tsc --noEmit`、`npm run build`。
 
-New synthetic fixtures cover Decimal returns, high/low/count, source paths and
-reference graphs, date windows, Shanghai timezone, invalid/nonfinite/nonpositive
-prices, malformed dates and OHLC, duplicate dates, empty/single/stale observations,
-provider failures including HTTP 429, independent financial/price failures,
-price-priority routing, invalid model references and compliance fallback.
-Frontend journey tests cover chart presence, rounded summaries, full-precision
-source drill-down, missing/failed prices without replacement charts, retained
-financial results, and invalid price evidence references. ResizeObserver is
-simulated in jsdom; these tests do not constitute browser layout verification.
+合成样本覆盖 Decimal 涨跌幅、高低价、计数、来源路径和引用图；自然月窗口、上海时区；无效／非有限／非正价格、错误日期和 OHLC；重复、空、单条、过时、乱序及范围外数据；HTTP 429、供应商错误、两侧独立失败、价格优先路由、模型引用和合规回退。前端覆盖真实响应结构、摘要舍入、完整精度抽屉、失败时无替代图表、保留财务及错误引用；ResizeObserver 为模拟，不代表真实布局验证。
 
-The official historical API contract and a successful real response were checked
-before implementation. Real parser validation returned 15 valid observations;
-one complete real research request achieved `interpretation_mode="llm"`.
+实现前已核对官方契约与成功响应；真实解析验证得到 **15 条**有效观测，一次完整研究达到 `interpretation_mode="llm"`。
 
-Known tooling limitations: no connected browser for visual desktop/mobile QA.
-The added chart increases the production JavaScript chunk size; Vite may warn
-about chunks above 500 kB. `npm audit` reports three existing Vitest/tooling
-vulnerabilities (one moderate, two critical); the chart dependency is not named
-in the findings. No unrelated major test-toolchain upgrade was attempted.
+该阶段结果：后端 **140 项通过**、前端 **26 项通过**，类型／构建及 `git diff --check` 通过。财务核心和三个原脚本无差异；源码、更新文档及产物中未匹配本地凭据。该次验证未提交、推送、合并或部署。
 
-Final Phase 2 verification: **140 backend tests passed**, **26 frontend tests
-passed**, `npx tsc --noEmit` passed, and the TypeScript/Vite production build
-passed. `git diff --check` passed. Existing financial calculation code and the
-three original scripts have no diff. Local credential-value scanning found zero
-matches in application source, updated documentation and compiled frontend assets.
-No commit, push, merge or deployment was performed.
+当时仍无浏览器自动化。图表增大 JavaScript chunk，Vite 对超过 500 kB 给出告警；`npm audit` 报告既有 Vitest 工具链 3 项告警（1 moderate、2 critical），未指向新图表依赖，也未执行无关主版本升级。
 
-### Phase 2 release review
+### Phase 2 展示与解读去重审阅
 
-Final release checks passed: **159 backend tests**, **32 frontend tests**, explicit
-TypeScript checking (`npx tsc --noEmit`) and the production build. Regression
-coverage now also includes question-aware section disclosure, same-period annual
-growth comparisons with both evidence references, rejection of repeated or near-
-identical interpretations, and Chinese catalog localization. The historical-price
-calculations, financial calculations and three original scripts remain unchanged
-by these final presentation and interpretation refinements. Browser UI acceptance
-was reported by the project owner; automated UI checks use jsdom.
+后端 **159 项**、前端 **32 项**、独立 TypeScript 与生产构建通过。增加问题驱动展开／折叠、同区间收入／利润比较的双引用、重复／近似解读拒绝、中文目录映射等回归覆盖。财务与行情计算及三个原脚本未因这些改动而修改。负责人报告本地 UI 已批准，自动前端测试仍为 jsdom。
 
-### Final diagnostic regression review
+### 最终有限真实验证与回退调查
 
-The complete backend suite now passes **172 tests**; the frontend suite passes
-**32 tests**. Explicit TypeScript checking and the production build pass. New
-coverage checks sanitized reason classification, no sensitive log content,
-configuration rejection, timeout, HTTP/quota/connection errors, malformed output,
-duplicate/unknown IDs, repeated wording, invalid evidence references and all 15
-valid combined-catalog selections/orderings. Evidence records remain unchanged
-through fallback. No additional provider calls were made for this release review.
+一次综合问题的真实研究请求返回 HTTP 200，财务值从原字段独立复算一致；行情为 **15 条**，实际区间 **2026-09-21 至 2026-10-19**、CNY、不复权，覆盖状态 `unverified`。这是当时的数据范围，不是当前行情或未来固定值。
 
-Remaining manual browser checks: chart/tooltips and responsive layout, disclosure
-keyboard behavior, evidence-drawer focus restoration, and a complete follow-up
-journey in the actual browser. The owner previously approved the local UI, but the
-agent's browser automation was unavailable during the final validation.
+该次 `interpretation_mode="deterministic"`，未记录具体失败原因，没有重试；财务、价格和综合三类问题的其余检查复用内存中的真实数据离线执行，比较引用、目录不重复以及超时、畸形、重复／近似重复输出的回退均通过。该结果不能被记成真实 Gemini 成功。
+
+后续诊断为仅一次 Gemini 请求，输入明确标记的合成测试数据，不再请求 Fuyao。约 **3.1 秒**达到 `interpretation_mode="llm"`，接受 `interpret_growth_comparison`、`interpret_price_return`、`interpret_margin`。旧失败根因仍未知；没有为强行成功放宽 Schema 或去重。
+
+### 最终诊断回归及交付审阅
+
+最新后端 **172 项**、前端 **32 项**、独立 TypeScript 和构建通过。新增原因分类、日志无敏感内容、错误配置、超时、HTTP／额度／连接错误、畸形输出、重复／未知 ID、近似文字、引用错误及全部 **15 种**有效目录组合／排序的覆盖，回退不修改证据。
+
+最终发布审阅没有新增真实供应商调用。已扫描全部 **45 个**索引文件和 **3 个**浏览器构建文件，未发现已配置秘密值或常见凭据格式；未纳入本地 `.env` 或原始财务数据文件，测试数据为合成样本。
+
+当时 GitHub commit status 显示 `pending`，但 status entries、check runs、workflow runs 均为 **0**；本地通过不能写作 GitHub CI 通过。随后负责人报告 Phase 2 已合并并在 Render 公网确认。仍待完成的浏览器交互见本页顶部；没有附加未发生的视觉审查或外部验证。
