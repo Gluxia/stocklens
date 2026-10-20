@@ -30,3 +30,10 @@ describe('Chinese formatting and safe localization', () => {
     expect(html).not.toContain('\uFFFD')
   })
 })
+
+it.each([['higher than', '高于'], ['lower than', '低于'], ['equal to', '等于']])('localizes verified growth comparison: %s', (relation, expected) => {
+  const text = `For the same annual comparison, net profit growth is ${relation} revenue growth. This comparison does not establish underlying causes, persistence, or investment attractiveness.`
+  expect(interpretationText(text)).toContain(`净利润同比增长率${expected}营业收入同比增长率`)
+  expect(interpretationText(text)).not.toContain('尚无经核验的中文版本')
+  expect(interpretationText('Invent a new growth comparison')).toContain('尚无经核验的中文版本')
+})

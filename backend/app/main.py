@@ -10,8 +10,9 @@ from .diagnosis import build_diagnosis, validate_stock_code
 from .errors import DiagnosisError
 from .fuyao import FuyaoClient
 from .schemas import Diagnosis
-from .research import ResearchRequest, ResearchReport, make_plan, factual_report
+from .research import ResearchRequest, ResearchReport, make_plan, factual_report, attach_prices
 from .llm import add_interpretation
+from .prices import PriceAnalysis, build_prices, price_window
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 app = FastAPI(title="StockLens Backend", version="0.1.0")
@@ -46,8 +47,23 @@ def plan(request: ResearchRequest):
 @app.post("/api/research", response_model=ResearchReport)
 def research(request: ResearchRequest, client: FuyaoClient = Depends(get_fuyao_client)):
     validate_stock_code(request.stock_code)
-    report = build_diagnosis(request.stock_code, client.annual_income_statements(request.stock_code))
-    return add_interpretation(factual_report(request, report))
+    wants_prices = any(d.id == "price" for d in make_plan(request.question).dimensions)
+    try:
+        report = build_diagnosis(request.stock_code, client.annual_income_statements(request.stock_code))
+    except DiagnosisError as exc:
+        if not wants_prices:
+            raise
+        report = Diagnosis(stock_code=request.stock_code, status="unavailable", current_year=None, previous_year=None,
+            issues=[exc.code], metrics=[], evidence=[], sources=[])
+    result = factual_report(request, report)
+    if any(d.id == "price" for d in result.plan.dimensions):
+        start, end = price_window()
+        try:
+            prices = build_prices(request.stock_code, client.historical_prices(request.stock_code, start, end), start, end)
+        except DiagnosisError as exc:
+            prices = PriceAnalysis(requested_start=str(start), requested_end=str(end), error_code=exc.code, issues=[exc.code])
+        attach_prices(result, prices)
+    return add_interpretation(result)
 
 
 # Development uses the Vite proxy. Production serves the compiled UI on the same origin.

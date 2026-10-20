@@ -97,19 +97,34 @@ export const planSchema = z.object({
   dimensions: z.array(z.object({ id: z.string(), label: z.string(), reason: z.string(), availability: z.enum(['available', 'unavailable']) })),
 })
 const findingSchema = z.object({ id: z.string(), category: z.enum(['positive', 'negative', 'mixed', 'unknown']), kind: z.enum(['observation', 'limitation']), title: z.string(), text: z.string(), evidence_ids: z.array(z.string()), dimension: z.string() })
+export const priceSchema = z.object({
+  status: z.enum(['partial', 'unavailable']), requested_start: z.string(), requested_end: z.string(),
+  actual_start: z.string().nullable(), actual_end: z.string().nullable(), currency: z.literal('CNY'),
+  adjustment: z.literal('none'), interval: z.literal('1d'), coverage: z.literal('unverified'),
+  retrieved_at: z.string().datetime({ offset: true }).nullable(), error_code: z.string().nullable(), issues: z.array(z.string()),
+  observations: z.array(z.object({ date: z.string(), close: numeric, high: numeric, low: numeric, evidence_ids: z.array(z.string()) })),
+  metrics: diagnosisSchema.shape.metrics, evidence: diagnosisSchema.shape.evidence, sources: diagnosisSchema.shape.sources,
+})
+export type PriceAnalysis = z.infer<typeof priceSchema>
+export const reportEvidence = (report: { diagnosis: Diagnosis; price_analysis?: PriceAnalysis | null }) => [...report.diagnosis.evidence, ...(report.price_analysis?.evidence ?? [])]
+export const reportSources = (report: { diagnosis: Diagnosis; price_analysis?: PriceAnalysis | null }) => [...report.diagnosis.sources, ...(report.price_analysis?.sources ?? [])]
 export const researchSchema = z.object({
-  question: z.string(), plan: planSchema, diagnosis: diagnosisSchema,
+  question: z.string(), plan: planSchema, diagnosis: diagnosisSchema, price_analysis: priceSchema.nullable().optional(),
   findings: z.array(findingSchema), observations: z.array(findingSchema),
   interpretation_mode: z.enum(['llm', 'deterministic']), interpretation_status: z.string(),
   interpretations: z.array(z.object({ id: z.string(), text: z.string(), evidence_ids: z.array(z.string()) })),
   freshness: z.string(), freshness_status: z.enum(['recent_annual_period', 'stale', 'unknown']),
   follow_up_questions: z.array(z.string()), disclaimer: z.string(),
 }).superRefine((report, context) => {
-  const ids = new Set(report.diagnosis.evidence.map(e => e.evidence_id))
-  const sourceIds = new Set(report.diagnosis.sources.map(s => s.source_id))
-  if (ids.size !== report.diagnosis.evidence.length || sourceIds.size !== report.diagnosis.sources.length ||
-      report.diagnosis.metrics.some(m => !ids.has(m.evidence_id)) ||
-      report.diagnosis.evidence.some(e => !sourceIds.has(e.source_id) || e.input_evidence_ids.some(id => !ids.has(id))) ||
+  const evidence = reportEvidence(report)
+  const sources = reportSources(report)
+  const metrics = [...report.diagnosis.metrics, ...(report.price_analysis?.metrics ?? [])]
+  const ids = new Set(evidence.map(e => e.evidence_id))
+  const sourceIds = new Set(sources.map(s => s.source_id))
+  if (ids.size !== evidence.length || sourceIds.size !== sources.length ||
+      metrics.some(m => !ids.has(m.evidence_id)) ||
+      evidence.some(e => !sourceIds.has(e.source_id) || e.input_evidence_ids.some(id => !ids.has(id))) ||
+      (report.price_analysis?.observations.some(o => o.evidence_ids.some(id => !ids.has(id))) ?? false) ||
       [...report.findings, ...report.observations, ...report.interpretations].some(f => f.evidence_ids.some(id => !ids.has(id)))) {
     context.addIssue({ code: 'custom', message: '证据引用无效' })
   }

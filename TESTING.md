@@ -141,3 +141,61 @@ evidence validation, or fallback rules changed.
   Docker daemon was unavailable; no actual container build/run was claimed.
 - The Render Blueprint now uses the live-verified Gemini model and endpoint and
   prompts privately for both keys. No Render deployment or push was performed.
+
+## Phase 2 historical prices
+
+Run `.venv/bin/python -m pytest backend/tests -q`, then in `frontend/` run
+`npm test`, `npx tsc --noEmit`, and `npm run build`.
+
+New synthetic fixtures cover Decimal returns, high/low/count, source paths and
+reference graphs, date windows, Shanghai timezone, invalid/nonfinite/nonpositive
+prices, malformed dates and OHLC, duplicate dates, empty/single/stale observations,
+provider failures including HTTP 429, independent financial/price failures,
+price-priority routing, invalid model references and compliance fallback.
+Frontend journey tests cover chart presence, rounded summaries, full-precision
+source drill-down, missing/failed prices without replacement charts, retained
+financial results, and invalid price evidence references. ResizeObserver is
+simulated in jsdom; these tests do not constitute browser layout verification.
+
+The official historical API contract and a successful real response were checked
+before implementation. Real parser validation returned 15 valid observations;
+one complete real research request achieved `interpretation_mode="llm"`.
+
+Known tooling limitations: no connected browser for visual desktop/mobile QA.
+The added chart increases the production JavaScript chunk size; Vite may warn
+about chunks above 500 kB. `npm audit` reports three existing Vitest/tooling
+vulnerabilities (one moderate, two critical); the chart dependency is not named
+in the findings. No unrelated major test-toolchain upgrade was attempted.
+
+Final Phase 2 verification: **140 backend tests passed**, **26 frontend tests
+passed**, `npx tsc --noEmit` passed, and the TypeScript/Vite production build
+passed. `git diff --check` passed. Existing financial calculation code and the
+three original scripts have no diff. Local credential-value scanning found zero
+matches in application source, updated documentation and compiled frontend assets.
+No commit, push, merge or deployment was performed.
+
+### Phase 2 release review
+
+Final release checks passed: **159 backend tests**, **32 frontend tests**, explicit
+TypeScript checking (`npx tsc --noEmit`) and the production build. Regression
+coverage now also includes question-aware section disclosure, same-period annual
+growth comparisons with both evidence references, rejection of repeated or near-
+identical interpretations, and Chinese catalog localization. The historical-price
+calculations, financial calculations and three original scripts remain unchanged
+by these final presentation and interpretation refinements. Browser UI acceptance
+was reported by the project owner; automated UI checks use jsdom.
+
+### Final diagnostic regression review
+
+The complete backend suite now passes **172 tests**; the frontend suite passes
+**32 tests**. Explicit TypeScript checking and the production build pass. New
+coverage checks sanitized reason classification, no sensitive log content,
+configuration rejection, timeout, HTTP/quota/connection errors, malformed output,
+duplicate/unknown IDs, repeated wording, invalid evidence references and all 15
+valid combined-catalog selections/orderings. Evidence records remain unchanged
+through fallback. No additional provider calls were made for this release review.
+
+Remaining manual browser checks: chart/tooltips and responsive layout, disclosure
+keyboard behavior, evidence-drawer focus restoration, and a complete follow-up
+journey in the actual browser. The owner previously approved the local UI, but the
+agent's browser automation was unavailable during the final validation.
