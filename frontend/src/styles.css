@@ -2213,3 +2213,22 @@ textarea {
     padding-inline: 0;
   }
 }
+
+/* Price research uses the existing typography and brand palette. */
+.price-section { margin: 32px 0; padding: 24px; background: #fff; border: 1px solid #E5E8EF; border-radius: 16px; min-width: 0; }
+.price-section > p, .price-notices { font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.price-notices { color: #667085; padding-left: 20px; }
+.price-chart { height: 300px; width: 100%; min-width: 0; margin: 24px 0; }
+.price-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.price-metrics .metric-card strong { font-size: 32px; }
+.price-observations { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.price-observations button { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+@media (max-width: 600px) { .price-section { padding: 16px; } .price-metrics { grid-template-columns: minmax(0, 1fr); } .price-chart { height: 260px; } }
+
+/* Native disclosure preserves keyboard controls for supplementary research context. */
+.supplementary-context { margin-block: 24px; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: #fff; min-width: 0; }
+.supplementary-context > summary { cursor: pointer; font-size: var(--type-body); line-height: 1.6; color: var(--text-primary); font-weight: 500; overflow-wrap: anywhere; }
+.supplementary-context > summary:focus-visible { outline: 2px solid #C92339; outline-offset: 5px; border-radius: 3px; }
+.supplementary-context[open] > summary { margin-bottom: 20px; }
+.diagnosis-section-title { margin-block: 24px 12px; }
+@media (max-width: 600px) { .supplementary-context { padding: 16px; } }

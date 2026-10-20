@@ -174,3 +174,119 @@ describe('Simplified Chinese presentation', () => {
     expect(screen.queryByText('Valuation not verified')).not.toBeInTheDocument()
   })
 })
+
+// Synthetic prices are fixtures, not company market observations.
+function priceReport(): ResearchReport {
+  const report = structuredClone(fixture)
+  report.question = '贵州茅台过去一个月的股价表现如何？'
+  const src = { ...source, source_id: 'price-source', endpoint: 'https://fuyao.aicubes.cn/api/a-share/prices/historical', reporting_basis: 'daily_unadjusted', unit_basis: 'A-share prices are CNY per the Fuyao prices contract.' }
+  const raw = (id: string, value: string, index: number) => ({ ...fixture.diagnosis.evidence[1], evidence_id: id, source_id: src.source_id, endpoint: src.endpoint, value, original_field_name: 'close_price', json_path: `$.data.item[${index}].close_price`, reporting_period: index === 0 ? '2025-09-22' : '2025-10-17' })
+  report.price_analysis = { status: 'partial', requested_start: '2025-09-20', requested_end: '2025-10-19', actual_start: '2025-09-22', actual_end: '2025-10-17', currency: 'CNY', adjustment: 'none', interval: '1d', coverage: 'unverified', retrieved_at: timestamp, error_code: null, issues: ['coverage_unverified'],
+    observations: [{ date: '2025-09-22', close: '100', high: '120', low: '90', evidence_ids: ['price-first'] }, { date: '2025-10-17', close: '110.123456789', high: '120', low: '90', evidence_ids: ['price-last'] }],
+    metrics: [{ name: 'price_return', value: '10.123456789', unit: '%', status: 'available', reason: null, evidence_id: 'price-return' }],
+    evidence: [raw('price-first', '100', 0), raw('price-last', '110.123456789', 1), { ...fixture.diagnosis.evidence[0], evidence_id: 'price-return', source_id: src.source_id, endpoint: src.endpoint, value: '10.123456789', reporting_period: '2025-09-22 ~ 2025-10-17', formula: '(end_close / start_close - 1) * 100', input_evidence_ids: ['price-last', 'price-first'] }], sources: [src] }
+  report.findings.unshift({ id: 'price_return', category: 'positive', kind: 'observation', title: 'price_return', text: 'Verified price', evidence_ids: ['price-return'], dimension: 'price' })
+  return report
+}
+
+describe('Historical price research', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: (entries: { contentRect: { width: number; height: number } }[]) => void) {}
+      observe() { this.callback([{ contentRect: { width: 800, height: 300 } }]) }
+      unobserve() {} disconnect() {}
+    })
+  })
+  it('shows price fields, rounds summaries and opens source evidence', async () => {
+    mockJourney(priceReport()); render(<App />); const user = await start()
+    expect(await screen.findByRole('heading', { name: '历史股价表现' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /历史收盘价折线图/ })).toBeInTheDocument()
+    expect(screen.getByText(/尚未核验交易日历/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /观测区间价格涨跌幅\s+10.12%/ }))
+    const drawer = screen.getByRole('dialog')
+    expect(within(drawer).getByText('10.123456789')).toBeInTheDocument()
+    expect(within(drawer).getByText('(end_close / start_close - 1) * 100')).toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: /close_price 2025-10-17/ }))
+    expect(within(drawer).getByText('$.data.item[1].close_price')).toBeInTheDocument()
+    expect(within(drawer).getByText('110.123456789')).toBeInTheDocument()
+  })
+  it.each(['upstream_rate_limited', 'upstream_timeout'])('keeps financial results without a chart after %s', async code => {
+    const report = priceReport()
+    Object.assign(report.price_analysis!, { status: 'unavailable', observations: [], metrics: [], evidence: [], sources: [], actual_start: null, actual_end: null, error_code: code, issues: [code] })
+    report.findings = fixture.findings
+    mockJourney(report); render(<App />); await start()
+    expect(await screen.findByText('暂无通过核验的历史价格，不生成价格图表。')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /历史收盘价折线图/ })).not.toBeInTheDocument()
+    expect(screen.getByText('20.00%')).toBeInTheDocument()
+  })
+  it('rejects fabricated price observation and calculation references', () => {
+    const report = priceReport()
+    expect(researchSchema.safeParse(report).success).toBe(true)
+    report.price_analysis!.observations[0].evidence_ids = ['fabricated']
+    expect(researchSchema.safeParse(report).success).toBe(false)
+    report.price_analysis!.observations[0].evidence_ids = ['price-first']
+    report.price_analysis!.evidence[2].input_evidence_ids = ['fabricated']
+    expect(researchSchema.safeParse(report).success).toBe(false)
+  })
+  it('displays empty price data explicitly', async () => {
+    const report = priceReport()
+    Object.assign(report.price_analysis!, { status: 'unavailable', observations: [], metrics: [], evidence: [], sources: [], actual_start: null, actual_end: null, issues: ['no_price_data'] })
+    report.findings = fixture.findings
+    mockJourney(report); render(<App />); await start()
+    expect(await screen.findByText('该请求区间未返回有效价格。')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /历史收盘价折线图/ })).not.toBeInTheDocument()
+  })
+})
+
+
+describe('Question-aware diagnosis presentation', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: (entries: { contentRect: { width: number; height: number } }[]) => void) {}
+      observe() { this.callback([{ contentRect: { width: 800, height: 300 } }]) }
+      unobserve() {} disconnect() {}
+    })
+  })
+  it('expands price research and exposes financial context through a keyboard-accessible disclosure', async () => {
+    const report = priceReport()
+    mockJourney(report); render(<App />); const user = await start()
+    expect(await screen.findByRole('region', { name: '历史股价分析' })).toBeVisible()
+    const summary = screen.getByText('补充财务背景')
+    expect(summary.closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByText('年度财务指标')).not.toBeVisible()
+    summary.focus()
+    expect(summary).toHaveFocus()
+    await user.keyboard('{Enter}')
+    // jsdom does not emulate the browser's native Enter-to-toggle default action.
+    await user.click(summary)
+    expect(summary.closest('details')).toHaveAttribute('open')
+    expect(screen.getByRole('region', { name: '年度财务分析' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /营业收入同比增长率 20.00%/ }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('metric-1')
+  })
+  it('keeps financial research primary and collapses any returned price context', async () => {
+    const report = priceReport()
+    report.question = '营业收入和净利润增长如何？'
+    mockJourney(report); render(<App />); const user = await start()
+    const financial = await screen.findByRole('region', { name: '年度财务分析' })
+    expect(financial).toBeVisible()
+    const summary = screen.getByText('补充历史价格背景')
+    expect(summary.closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByRole('region', { name: '历史股价分析' })).not.toBeVisible()
+    await user.click(summary)
+    const price = screen.getByRole('region', { name: '历史股价分析' })
+    expect(price).toBeVisible()
+    expect(financial.compareDocumentPosition(price) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+  it('shows both diagnoses expanded for an explicit financial-and-price question without inventing conflicts', async () => {
+    const report = priceReport()
+    report.question = '贵州茅台营业收入与净利润增长如何，过去一个月股价表现如何？'
+    mockJourney(report); render(<App />); await start()
+    expect(await screen.findByRole('region', { name: '年度财务分析' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '历史股价分析' })).toBeVisible()
+    expect(screen.queryByText('补充财务背景')).not.toBeInTheDocument()
+    expect(screen.queryByText('补充历史价格背景')).not.toBeInTheDocument()
+    expect(report.findings.filter(f => f.category === 'mixed')).toHaveLength(0)
+    expect(screen.getAllByText('证据不足，暂未形成相关判断')).toHaveLength(3)
+  })
+})

@@ -69,3 +69,7 @@ class FuyaoClient:
     def price_snapshot(self, stock_code: str) -> SourceResponse:
         """Preserve the tested snapshot request for later phases; diagnosis does not use it."""
         return self._get(SNAPSHOT_ENDPOINT, {"thscodes": stock_code})
+
+    def historical_prices(self, stock_code, start, end) -> SourceResponse:
+        from .prices import price_parameters
+        return self._get("https://fuyao.aicubes.cn/api/a-share/prices/historical", price_parameters(stock_code, start, end))

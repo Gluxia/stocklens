@@ -1,17 +1,19 @@
 /** Presentation-only localization. Provider records and API objects stay untouched. */
+import Decimal from 'decimal.js'
 import { formatMetric, labels, reasonText, type Finding, type Plan, type ResearchReport } from './api'
 
 export const dimensionLabels: Record<string, string> = { growth: '成长能力', profitability: '盈利能力', valuation: '估值水平', price: '股价表现', quality: '盈利质量与财务韧性', data_quality: '数据质量' }
 export const safetyNotice = '本问题涉及投资操作或收益确定性。StockLens 仅提供基于证据的研究信息，不提供买卖建议，也不承诺收益。'
 export const disclaimer = '本报告仅提供研究信息，不构成买卖建议，不承诺收益。年度财务数据不能反映当前交易状况。'
 export const sourceName = (name: string) => name === 'Fuyao' ? 'Fuyao（扶摇）' : '数据来源待核验'
-export const unitText = (unit: string | null) => unit === 'CNY yuan' ? '人民币元（CNY）' : unit ?? '未提供'
+export const unitText = (unit: string | null) => unit === 'observations' ? '条' : unit === 'CNY yuan' ? '人民币元（CNY）' : unit ?? '未提供'
 export function periodText(period: string) {
   if (period === 'unknown') return '报告期未知'
   return period.replace(/(\d{4}) FY/g, '$1 年度').replace(' vs ', ' 对比 ')
 }
 export function dimensionReason(item: Plan['dimensions'][number]) {
   if (item.reason === 'No specific supported dimension matched; the default annual operating-performance review was selected.') return '未匹配到特定研究维度，默认从成长能力与盈利能力了解年度经营表现。'
+  if (item.reason === 'Included as annual financial context alongside historical prices; no causal link is established.') return '作为年度财务背景，与历史价格分别观察；不据此推断财务事件与股价变化之间的因果关系。'
   if (item.reason === 'Included as available annual financial context; it cannot answer the requested unavailable dimension.') return '作为可获取的年度财务背景纳入研究，不能替代所问维度缺失的证据。'
   if (/^The question matched .+ keywords\.$/.test(item.reason)) return `问题中包含与${dimensionLabels[item.id] ?? '该维度'}相关的关键词，因此纳入研究。`
   return '该维度由后端研究计划选定；具体选择原因暂未提供经核验的中文说明。'
@@ -24,6 +26,16 @@ export function freshnessText(report: ResearchReport) {
   return `最新返回报告期为 ${year} 年度。获取时间不代表数据反映当前经营或股价；本次未核查更新的中期报告。`
 }
 export function findingCopy(item: Finding, report: ResearchReport): { title: string; text: string } {
+  if (item.dimension === 'price') {
+    const price = report.price_analysis
+    if (item.id === 'price_coverage') return { title: '历史价格覆盖范围尚待核验', text: price?.status === 'unavailable' ? '未能取得有效历史价格，未生成图表或价格判断。请查看价格区块中的数据状态。' : '尚未核验完整交易日历。结果仅覆盖已返回的有效观测，不保证包含所有应有交易日；历史价格变化不能解释事件因果关系。' }
+    const m = price?.metrics.find(m => m.name === item.id && item.evidence_ids.includes(m.evidence_id))
+    if (m?.value !== null && m?.value !== undefined && m.status === 'available') {
+      const title = ({ price_return: '观测区间价格涨跌幅', price_high: '观测区间最高价', price_low: '观测区间最低价', price_count: '有效交易观测数' } as Record<string, string>)[m.name] ?? '历史价格事实'
+      const value = new Decimal(m.value).toFixed(m.name === 'price_count' ? 0 : 2)
+      return { title, text: `${price?.actual_start} 至 ${price?.actual_end}，${title}为 ${value}${m.unit === '%' ? '%' : m.unit === 'observations' ? ' 条' : ' 元'}。不复权，仅描述历史观测，不代表投资建议。` }
+    }
+  }
   const metric = report.diagnosis.metrics.find(metric => metric.name === item.id && item.evidence_ids.includes(metric.evidence_id))
   if (metric && labels[metric.name]) {
     if (metric.status !== 'available' || metric.value === null) return { title: `${labels[metric.name]}暂不可用`, text: `尚不能形成可核验的指标结果：${reasonText(metric.reason)}。` }
@@ -41,6 +53,10 @@ export function findingCopy(item: Finding, report: ResearchReport): { title: str
 
 // Exact catalog matching avoids translating arbitrary generated claims as trusted analysis.
 const interpretationTranslations: Record<string, string> = {
+  'For the same annual comparison, net profit growth is higher than revenue growth. This comparison does not establish underlying causes, persistence, or investment attractiveness.': '在同一年度对比中，净利润同比增长率高于营业收入同比增长率。该比较不说明变化成因、变化能否持续或投资吸引力。',
+  'For the same annual comparison, net profit growth is lower than revenue growth. This comparison does not establish underlying causes, persistence, or investment attractiveness.': '在同一年度对比中，净利润同比增长率低于营业收入同比增长率。该比较不说明变化成因、变化能否持续或投资吸引力。',
+  'For the same annual comparison, net profit growth is equal to revenue growth. This comparison does not establish underlying causes, persistence, or investment attractiveness.': '在同一年度对比中，净利润同比增长率等于营业收入同比增长率。该比较不说明变化成因、变化能否持续或投资吸引力。',
+  '区间收盘价变化仅描述已返回观测的历史价格表现，不包含分红收益；不能据此预测未来收益，也不能认定财务事件导致了股价变化。': '区间收盘价变化仅描述已返回观测的历史价格表现，不包含分红收益；不能据此预测未来收益，也不能认定财务事件导致了股价变化。',
   'The annual comparison shows expansion in this measure. It does not establish persistence, the underlying cause, or investment attractiveness.': '该指标在年度比较中上升，但现有证据不能说明增长能否持续、具体成因或投资吸引力。',
   'The annual comparison shows contraction in this measure. Additional evidence is needed to establish its cause or persistence.': '该指标在年度比较中下降，其成因及是否持续仍需更多证据核验。',
   'Revenue and profit signals should be considered together. Their divergence prevents a uniformly positive or negative reading of annual growth; causes remain unverified.': '营业收入与净利润应结合观察。两者变化方向不一致，不宜对年度增长作单一正面或负面判断；差异成因仍待核验。',
@@ -57,6 +73,7 @@ const statuses: Record<string, string> = {
 }
 export const interpretationStatus = (text: string) => statuses[text] ?? '解读状态暂未提供经核验的中文说明，请以客观事实与原始证据为准。'
 const followUps: Record<string, string> = {
+  '贵州茅台过去一个月的股价表现如何？': '贵州茅台过去一个月的股价表现如何？',
   'How did revenue and net profit growth compare?': '营业收入与净利润的同比增长表现有何差异？',
   'What does the reported net profit margin establish?': '已披露的净利润率能说明什么？',
   'What evidence is missing to assess valuation?': '评估估值水平还缺少哪些证据？',
@@ -67,4 +84,4 @@ export function metadataLabel(name: string) {
   const names: Record<string, string> = { thscode: '股票代码', fiscal_year: '财年', fiscal_period: '财务期间', period: '报告类型', currency: '币种', period_end_ms: '报告期末时间戳', report_date_ms: '披露时间戳' }
   return `${names[name] ?? '元数据'}路径（${name}）`
 }
-export const unitBasisText = (text: string) => ['Original-currency yuan, verified against the Fuyao financials contract.', 'Original currency yuan'].includes(text) ? '金额单位为原币元，依据 Fuyao 财务接口说明核验。' : '单位说明尚待核验，请对照原始响应与接口文档。'
+export const unitBasisText = (text: string) => text === 'A-share prices are CNY per the Fuyao prices contract.' ? '依据 Fuyao 行情接口通用约定，A 股价格以人民币元计价。' : ['Original-currency yuan, verified against the Fuyao financials contract.', 'Original currency yuan'].includes(text) ? '金额单位为原币元，依据 Fuyao 财务接口说明核验。' : '单位说明尚待核验，请对照原始响应与接口文档。'

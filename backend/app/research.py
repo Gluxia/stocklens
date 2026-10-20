@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from .schemas import Diagnosis
+from .prices import PriceAnalysis
 
 
 class ResearchRequest(BaseModel):
@@ -58,6 +59,7 @@ class ResearchReport(BaseModel):
     question: str
     plan: Plan
     diagnosis: Diagnosis
+    price_analysis: PriceAnalysis | None = None
     findings: list[Finding]
     observations: list[Finding]
     interpretation_mode: Literal["llm", "deterministic"]
@@ -73,7 +75,7 @@ DIMENSIONS = {
     "growth": ("Growth", ("growth", "grow", "revenue", "sales", "增长", "营收", "收入"), True),
     "profitability": ("Profitability", ("profit", "margin", "earnings", "利润", "盈利", "净利"), True),
     "valuation": ("Valuation", ("valuation", "value", "cheap", "expensive", "p/e", " pe ", "估值", "便宜", "贵吗", "太贵", "昂贵"), False),
-    "price": ("Price behavior", ("price", "trend", "momentum", "股价", "走势", "行情"), False),
+    "price": ("Price behavior", ("price", "trend", "momentum", "股价", "走势", "行情", "涨跌", "价格"), True),
     "quality": ("Earnings quality & resilience", ("cash", "debt", "quality", "risk", "现金", "负债", "质量", "风险"), False),
 }
 SAFETY_TERMS = ("buy", "sell", "guarantee", "guaranteed", "should i invest", "recommend", "target price", "买", "卖", "荐股", "保本", "稳赚", "保证收益")
@@ -83,6 +85,9 @@ def make_plan(question: str) -> Plan:
     text = question.casefold()
     sensitive = any(term in text for term in SAFETY_TERMS)
     selected = [key for key, (_, keywords, _) in DIMENSIONS.items() if any(word in text for word in keywords)]
+    if "price" in selected:
+        selected.remove("price")
+        selected.insert(0, "price")
     if not selected:
         selected = ["growth", "profitability"]
         reason = "No specific supported dimension matched; the default annual operating-performance review was selected."
@@ -96,7 +101,7 @@ def make_plan(question: str) -> Plan:
     if any(key not in ("growth", "profitability") for key in selected):
         for key in ("growth", "profitability"):
             if key not in selected:
-                dimensions.append(Dimension(id=key, label=DIMENSIONS[key][0], reason="Included as available annual financial context; it cannot answer the requested unavailable dimension.", availability="available"))
+                dimensions.append(Dimension(id=key, label=DIMENSIONS[key][0], reason=("Included as annual financial context alongside historical prices; no causal link is established." if "price" in selected and all(DIMENSIONS[k][2] for k in selected) else "Included as available annual financial context; it cannot answer the requested unavailable dimension."), availability="available"))
     return Plan(dimensions=dimensions, safety_notice=(
         "This question requests an investment action or certainty. StockLens provides factual research only and will not recommend trades or guarantee returns."
         if sensitive else None
@@ -155,10 +160,42 @@ def factual_report(request: ResearchRequest, diagnosis: Diagnosis, now: datetime
     )
 
 
+def growth_comparison(report: ResearchReport) -> Interpretation | None:
+    """Compare two available growth metrics over the same verified annual interval."""
+    evidence = {item.evidence_id: item for item in report.diagnosis.evidence}
+    metrics = {item.name: item for item in report.diagnosis.metrics}
+    verified = []
+    for name in ("revenue_growth", "net_profit_growth"):
+        metric = metrics.get(name)
+        if metric is None or metric.status != "available" or metric.value is None or metric.unit != "%":
+            return None
+        ev = evidence.get(metric.evidence_id)
+        if (ev is None or ev.status != "available" or ev.kind != "calculation" or ev.value != metric.value
+                or ev.unit != "%" or len(ev.input_evidence_ids) != 2
+                or not all(evidence.get(ref) and evidence[ref].status == "available" for ref in ev.input_evidence_ids)):
+            return None
+        verified.append((metric, ev))
+    if ((verified[0][1].reporting_period, verified[0][1].period_end)
+            != (verified[1][1].reporting_period, verified[1][1].period_end)):
+        return None
+    revenue, profit = (Decimal(metric.value) for metric, _ in verified)
+    relation = "higher than" if profit > revenue else "lower than" if profit < revenue else "equal to"
+    return Interpretation(id="interpret_growth_comparison",
+        text=f"For the same annual comparison, net profit growth is {relation} revenue growth. This comparison does not establish underlying causes, persistence, or investment attractiveness.",
+        evidence_ids=[metric.evidence_id for metric, _ in verified])
+
+
 def interpretation_catalog(report: ResearchReport) -> list[Interpretation]:
     """Only interpretations whose conditions were established by Python are candidates."""
-    candidates = []
+    comparison = growth_comparison(report) if any(d.id == "growth" for d in report.plan.dimensions) else None
+    candidates = [comparison] if comparison else []
     for finding in report.findings:
+        if comparison and finding.id in ("revenue_growth", "net_profit_growth", "divergent_growth"):
+            continue
+        if finding.dimension == "price":
+            if finding.id == "price_return":
+                candidates.append(Interpretation(id="interpret_price_return", text="区间收盘价变化仅描述已返回观测的历史价格表现，不包含分红收益；不能据此预测未来收益，也不能认定财务事件导致了股价变化。", evidence_ids=finding.evidence_ids))
+            continue
         if finding.category in ("positive", "negative"):
             candidates.append(Interpretation(
                 id=f"interpret_{finding.id}",
@@ -173,3 +210,25 @@ def interpretation_catalog(report: ResearchReport) -> list[Interpretation]:
     if margin:
         candidates.append(Interpretation(id="interpret_margin", text="The reported margin describes consolidated accounting profitability. It does not establish cash generation or relative competitive strength without additional evidence.", evidence_ids=margin.evidence_ids))
     return candidates
+
+
+def attach_prices(report: ResearchReport, prices: PriceAnalysis):
+    report.price_analysis = prices
+    price_observations = []
+    for metric in prices.metrics:
+        if metric.status != "available":
+            continue
+        value = Decimal(metric.value)
+        directional = metric.name == "price_return" and value != 0
+        title = {"price_return": "观测区间价格涨跌幅", "price_high": "观测区间最高价", "price_low": "观测区间最低价", "price_count": "有效交易观测数"}[metric.name]
+        display = format(value, ".0f" if metric.name == "price_count" else ".2f")
+        unit = "%" if metric.unit == "%" else " 条" if metric.unit == "observations" else " 元"
+        finding = Finding(id=metric.name, category=("positive" if value > 0 else "negative") if directional else "unknown",
+            kind="observation", title=title, text=f"{prices.actual_start} 至 {prices.actual_end}，{title}为 {display}{unit}。不复权，仅描述已返回的历史观测，不代表投资建议。", evidence_ids=[metric.evidence_id], dimension="price")
+        price_observations.append(finding)
+        if metric.name == "price_return":
+            report.findings.insert(0, finding)
+    report.observations = price_observations + report.observations
+    report.findings.append(Finding(id="price_coverage", category="unknown", kind="limitation", title="历史价格覆盖范围", text="未核验完整交易日历，仅对返回的有效观测计算；请求区间不等于完整交易区间。", evidence_ids=[m.evidence_id for m in prices.metrics], dimension="price"))
+    report.follow_up_questions.insert(0, "贵州茅台过去一个月的股价表现如何？")
+    return report

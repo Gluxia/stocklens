@@ -130,3 +130,21 @@ real Fuyao data returned `interpretation_mode="llm"`, three validated interpreta
 and complete financial metrics. No provider-specific production code change or
 safety relaxation was necessary. Restart any existing backend process to load
 the updated `.env`; already exported environment variables still take precedence.
+
+## Phase 2 price evidence
+
+Historical price findings are generated from validated daily observations. The
+price-return interpretation is a fixed Chinese catalog entry, with the exact
+available calculation evidence ID. Model output remains IDs only: arbitrary
+prose, numbers, new claims or altered evidence references are rejected. Price
+references are checked against the union of financial and price evidence; the
+financial calculations and existing reference checks remain unchanged. Annual
+expansion/contraction templates are never applied to price findings.
+
+The catalog explicitly excludes predictions, dividend-inclusive return claims,
+and causal claims connecting financial events to stock-price movements. Missing
+prices create no price interpretation candidate. Compliance-sensitive questions
+still bypass the model, and model failures still return deterministic facts.
+A real Phase 2 research call returned HTTP 200, 15 valid price observations and
+`interpretation_mode="llm"`, including `interpret_price_return` with validated
+references. No credentials or raw provider errors were printed.

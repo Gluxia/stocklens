@@ -278,3 +278,42 @@ questions, original field names, JSON paths, formulas, IDs, and raw JSON remain
 unchanged. Cards and narrative metrics use decimal.js to show two decimal places;
 the evidence drawer preserves full precision. No backend contract or formula is
 changed by localization.
+
+## Phase 2: historical price research
+
+Ask **“贵州茅台过去一个月的股价表现如何？”**. Price keywords select the
+price dimension first; annual statements remain separately labeled context.
+`POST /api/research` adds `price_analysis` only when prices are requested. The
+existing `/api/diagnosis` financial contract and calculations are unchanged.
+No new key or deployment configuration is needed; install the updated frontend
+lockfile with `npm --prefix frontend ci` and rebuild normally.
+
+The adapter uses Fuyao's documented `GET /api/a-share/prices/historical`, with
+one `thscode`, `interval=1d`, Unix-millisecond `start`/`end` and explicit
+`adjust=none`. The official contract is at
+[Fuyao prices documentation](https://fuyao.aicubes.cn/docs/api-reference/prices/)
+(and its official [full documentation](https://fuyao.aicubes.cn/llms-full.txt)).
+A successful real response verified `data.item[].date_ms`, OHLC fields, and
+`data.thscode`, `interval`, `adjust`. The adapter requires the identity metadata;
+missing/mismatched metadata fails safely rather than assuming an adjustment.
+CNY pricing and Shanghai dates follow the documented contract.
+
+The default requested window runs from the same calendar date last month
+(clamped at month-end) through yesterday in Shanghai, excluding today's
+unfinished daily bar. Other question-specified windows are not parsed yet; the
+UI always shows this default window. Return is `(last_close / first_close - 1)
+* 100`, not total shareholder return. High/low use daily highs/lows. Calculations
+use valid, unique observations and Decimal precision 38. Exact source strings,
+JSON paths, date paths, formulas, ordered inputs, timestamps and raw response
+hashes are available in the evidence drawer. Only chart coordinates use Number.
+
+Trading-calendar completeness is **unverified**, so available results are marked
+`partial`; requested dates are distinct from actual observation dates. Invalid
+rows are excluded with warnings, duplicate dates reject the series, fewer than
+two observations suppress return, and zero observations suppress the chart.
+Latest observations more than seven calendar days before the request end trigger
+a possible-staleness warning; this is not an exchange-calendar determination.
+Provider errors, including 429, produce an unavailable price section while
+preserving available financial results. Financial failures likewise do not
+prevent an otherwise valid price report. No automatic retries or interpolation
+are used. Public request limits and provider caching remain future work.
