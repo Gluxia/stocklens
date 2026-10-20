@@ -1,167 +1,100 @@
-# AI usage and evidence validation
+# AI 使用与验证记录
 
-## Actual AI behavior
+<a id="development-assistance-and-documented-human-review"></a>
+## 工具分工、人工决策与记录边界
 
-The backend optionally calls an HTTPS OpenAI-compatible Chat Completions endpoint
-using `LLM_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. It requests strict JSON Schema
-output. The API pattern follows the official [structured outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=chat).
-Provider responses are independently validated; provider schema support alone is
-not treated as proof of grounding.
+本文依据项目对话、实现迭代及实际执行的工具／测试记录，区分开发辅助与产品运行时 AI。本文不是候选人独立实现全部代码、手工核验所有数据或完成额外审计的声明。
 
-AI **selects and prioritizes** up to three interpretations from a small catalog
-whose conditions Python has established. This is deliberately constrained, not
-free-form financial generation. The UI labels this “AI-prioritized · validated.”
-It never claims a human-level comprehensive review or autonomous investment plan.
+| 角色 | 有记录的参与工作 | 不应作出的推断 |
+| --- | --- | --- |
+| OpenAI Codex：开发阶段 AI 辅助工具 | 检查原有脚本和架构；辅助后端／前端实现、中文化、价格证据接入、调试、回归测试执行及文档整理 | 不宣称具体底层 Codex 模型版本，也不将辅助实现描述成候选人独立手写 |
+| Google Gemini：产品运行时模型 | 已验证配置使用 `gemini-3.5-flash-lite`，通过 OpenAI-compatible API 选择和排序后端固定解读及证据 ID | 不负责计算指标、不自由撰写结论、不建立因果关系、不保证持续可用 |
+| 项目负责人／候选人：有记录的产品决策和审阅迭代 | 指定证据优先流程和安全约束，提出纠错要求，批准本地 UI 与问题驱动展示，并报告公网 Render 验证 | 无法据此证明其独立手工审计了每个源字段、公式或浏览器交互 |
 
-The model receives selected dimension IDs, factual observations and candidate
-interpretations with evidence IDs. Raw questions, raw response bodies, API keys,
-and personal portfolio data are not placed in the prompt. Financial observations
-sent to the configured AI provider are the same public-company metrics shown in
-the report. Only the backend sends the request; secrets are not bundled by Vite.
+### 真实 Fuyao 契约与计算核验
 
-The model may return only interpretation IDs and exact ordered evidence IDs.
-It cannot supply its own prose, numerical values, category labels, recommendations,
-or prices. Display wording comes from backend-owned templates. Thus the model
-cannot introduce new financial claims through untrusted generated text.
+负责人报告原始三个脚本已使用真实 Fuyao 数据运行成功，并要求扩展前核验接口、单位和报告期。记录中的 AI 辅助审阅使用官方文档与成功的真实响应，检查了：
 
-## Validation and fallback
+- 年度合并利润表字段、`net_profit` 与 `parent_holder_net_profit` 的口径区别。
+- A 股 CNY 金额单位、年度期间及上海时区时间戳。
+- 历史日线 OHLC、日期、股票身份、周期和复权元数据。
+- 有限真实验证中，从原始 JSON 路径读取数值并用 Python 独立复算；自动计算测试使用合成样本。
 
-Validation rejects unknown/duplicate interpretation IDs, unknown evidence IDs,
-unavailable evidence, mismatched ordered references, additional fields, empty or
-oversized selections, malformed JSON, refusals, and truncated completions. All
-interpretations must exist in the catalog built for this exact response.
+这是在人类指定要求下完成的、有记录的 AI 辅助契约／计算核验，不等于候选人逐项手工重复了全部检查。官方示例没有被替换成真实公司结果。详见[财务公式与口径](backend/README.md#source-verification-and-calculation-policy)及[测试证据分类](TESTING.md#submission-test-coverage-and-evidence-types)。
 
-HTTP errors, timeouts, missing key/model, unsupported schema configuration, or
-validation failures preserve the financial report and return a labeled deterministic
-factual summary. The UI displays the actual mode and status; it never simulates an
-AI-generated result. A live model request is not required for the app to work.
+### 发现、修正与未解决事项
 
-Requests use a 5-second connection and 15-second read timeout, do not follow
-redirects with credentials, and do not echo provider bodies or exception strings.
-Only HTTPS backend-configured endpoints are accepted. The frontend cannot set the
-provider URL, model, or key.
+| 实际问题或不合理表现 | 审阅要求与修正 | 验证结果与边界 |
+| --- | --- | --- |
+| 不同增长指标出现相同的泛化 AI 解读 | 负责人报告重复并要求具体比较；同年度区间的收入／利润增长改为高于、低于或等于的单条比较，保留两项证据引用；拒绝重复 ID 和近似文字 | 回归测试覆盖比较关系、引用篡改与重复文本；未修改指标计算 |
+| 股价问题中年度财务背景过于突出 | 负责人要求按问题调整优先级；股价问题展开行情并折叠“补充财务背景”，财务问题优先财务，综合问题同时展开 | 三类前端测试覆盖可见性和证据访问；属于产品审阅迭代，不是新的金融推断 |
+| Gemini 先前成功，后续真实研究却意外回退 | 原来的统一回退状态无法定位原因；增加安全原因码、HTTP 状态日志及诊断测试，并处理畸形响应对象 | 上一次回退原因仍未知；后续唯一一次 Gemini 合成证据探针约 3.1 秒成功，15 种有效组合／排序离线通过；未放宽校验 |
+| 最初 `gemini-2.5-flash` 探针返回 HTTP 404 | 通过官方模型列表调查访问能力，验证替代模型后才修改本地模型值 | 原始 404 根因未证实；完整成败实验保留在下文，未以降级 Schema 或伪造成功解决 |
+| 无交易日历证据却可能把近期日线误当作完整月度行情 | 按已确认数据边界标注 `partial`，区分请求和实际日期，不由 AI 推测缺失交易日 | 交易日完整性仍未解决；日期、无效行及单条／空序列等已有测试，图表展示不能证明完整覆盖 |
 
-## Question routing and investment-action requests
+这些记录说明 AI 辅助实现及集成中的具体问题，不声称 Gemini 曾编造财务数值，也不补造候选人的个人工作。成功探针不能替代持续验证。交易日历核验、公开限流和缓存仍未完成。
 
-Routing always uses deterministic English/Chinese keyword rules. It selects growth,
-profitability, valuation, price behavior, and/or earnings-quality dimensions with
-visible reasons. Unsupported dimensions remain unavailable. Unknown intents default
-to an explicit growth/profitability review; full semantic understanding is not claimed.
+## 产品内 Gemini 的实际行为
 
-A conservative keyword filter detects common English/Chinese requests for buy/sell
-actions, recommendations, target prices, or guaranteed outcomes. These receive a
-factual-research notice and bypass the LLM. This filter is not a complete language
-safety classifier. Even if phrasing evades it, the output schema and backend
-catalog cannot emit trading instructions or guarantees. User input is rendered as
-React text and is not an instruction channel for the model.
+后端可使用 `LLM_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL` 调用 HTTPS OpenAI-compatible Chat Completions，要求 strict JSON Schema。调用模式参考[结构化输出文档](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=chat)，但供应商声称支持 Schema 不等于已证明输出有依据。
 
-## Observations and interpretation
+Gemini 最多从 Python 已建立条件的目录中**选择并排序三项解读**，不是自由生成财务分析。中文界面标记为“AI 选取 · 证据已核验”，不宣称完整专家审查或自主投资规划。
 
-- Positive/negative evidence means the sign of a valid annual growth comparison
-  against a positive prior baseline. It does not mean the stock is attractive.
-- Opposite revenue/profit growth signs produce a mixed observation with both
-  evidence references. No causal explanation is invented.
-- Net margin is a numerical observation; its absolute sign does not establish
-  relative quality. Missing benchmarks are explicit.
-- No directional conclusion is created for missing data or zero growth.
-- Missing adapters produce coverage limitations without invented source IDs.
-- Stale annual years and unverified recency are explicitly disclosed.
+模型收到所选维度 ID、客观观察、候选解读及其证据 ID。原始研究问题、供应商原始响应、API key 和个人持仓不进入提示词；财务观察与报告展示的公共公司指标一致。仅后端发起请求，Vite 不打包密钥。
 
-Phase 1's Decimal calculations, positive-baseline rules, unit verification, period
-validation, duplicate rejection, and original response hashes remain in force.
-The frontend also validates the response schema and evidence-reference graph before
-showing any report. It rounds display cards to two decimals using decimal.js;
-full-precision strings and original JSON remain available in the evidence panel.
+模型只能返回解读 ID 和精确有序的证据 ID，不能自行提供文案、数值、类别、建议或价格。最终表述来自后端模板；未经信任的生成文字不能成为新增财务事实。
 
-## Validation status and remaining uncertainty
+## 结构化输出、证据约束与回退
 
-Automated tests exercise successful model selection through mocks, invalid references,
-extra unsupported prose, refusal, timeout, malformed responses, compliance-sensitive
-questions, and deterministic fallback. Mock success is not a claim of live model
-availability. Live provider verification requires configured credentials and a
-compatible deployed model. See TESTING.md for the actual checks run.
+校验拒绝未知／重复解读 ID、未知或不可用证据、有序引用不匹配、额外字段、空或过多选项、畸形 JSON、拒绝和截断输出。所有解读必须属于本次响应建立的目录，重复或近似解读也不能绕过校验。
 
-## Gemini OpenAI-compatible verification (2026-10-20)
+HTTP 错误、超时、缺少 key/model、Schema 不兼容或校验失败时，保留可用报告并返回有标签的确定性事实摘要。不模拟 AI 成功，也不要求模型在线才能使用应用。财务与价格数据可独立失败；可用的一侧仍保留。
 
-Configured target: `gemini-2.5-flash` at
-`https://generativelanguage.googleapis.com/v1beta/openai`.
-Google documents the same Bearer-authenticated Chat Completions route and
-schema-based structured output in its [compatibility guide](https://ai.google.dev/gemini-api/docs/openai#structured-output).
-The existing request therefore retains `response_format=json_schema`,
-`strict=true`, and `max_completion_tokens=1000`. No schema downgrade, additional
-provider call, automatic model replacement, or evidence-validation change was made.
+连接超时为 5 秒，读取超时为 15 秒；不携带凭据跟随重定向，不回传供应商错误正文或异常字符串。仅接受后端配置的 HTTPS 端点，前端不能设置供应商地址、模型或 key。
 
-One live call used explicitly marked synthetic test observations, never real
-financial statements or the user's original question. It returned HTTP 404 with
-an unreadable/non-JSON response. The backend correctly remained in deterministic
-mode with zero accepted interpretations. This does not establish successful live
-support for either `strict=true` or `max_completion_tokens`; a 404 is insufficient
-evidence to change those request parameters. Google Cloud documents
-`max_completion_tokens` as an alias for `max_tokens` in its separate
-[Vertex-compatible interface](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/call-vertex-using-openai-library),
-but that alone does not verify this Developer API endpoint.
+### 安全诊断日志
 
-Google's [model lifecycle notice](https://ai.google.dev/gemini-api/docs/deprecations/)
-currently limits 2.5 access to prior active users. A new key/project may therefore
-lack model access, but the exact cause of the observed 404 is not established.
-Check model access and endpoint/network routing before retrying. Local credentials
-were used only for authentication, and neither key values nor sensitive headers
-were printed. The local `.env`, model selection, production AI code, financial
-logic, and frontend were not changed.
+日志只包含固定原因码与可选 HTTP 状态：配置、合规绕过、证据不足、超时、HTTP／连接错误、HTTP 429、畸形输出、重复／未知 ID、重复文字及引用失败。不记录凭据、提示词、原始错误正文或异常消息。
 
-Added mock-based Gemini contract/failure tests verify the exact URL, schema and
-token parameters, available evidence references, sanitized HTTP 404 fallback,
-malformed output, invented references, and unsupported numerical prose. Mock
-success does not imply live provider success.
+Schema、引用检查和 `0.90` 文字相似度阈值未因排查而放宽；畸形响应对象同样安全回退，不再产生未捕获的属性错误。旧的意外回退缺少分类日志，无法追溯其原因。后续使用明确标识的合成样本进行了一次 Gemini 探针，约 3.1 秒达到 `interpretation_mode="llm"`，三条不同解读均通过；15 种有效非空组合／排序离线通过，不证明供应商持续稳定。
 
-## Verified replacement model (2026-10-20)
+## 问题路由、事实分类与投资建议边界
 
-The earlier Gemini 2.5 failure is superseded by successful live verification of
-`gemini-3.5-flash-lite`, selected from the authenticated official model listing.
-The [official model page](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)
-documents structured-output support. In this environment, basic Chat Completions
-and the exact existing strict-schema request both returned HTTP 200.
-`max_completion_tokens=1000` and `strict=true` required no parameter adaptation.
-This verifies the current StockLens schema, not every possible JSON Schema.
+- 路由使用中英文确定性关键词，选择成长、盈利、估值、股价及盈利质量维度并说明理由。未支持维度明确不可用；未知意图默认成长／盈利审阅，不宣称完整语言理解。
+- 常见买卖、推荐、目标价及保证收益请求由保守关键词检测并绕过 LLM，显示事实研究提示。这不是完整合规分类器；即使输入逃过关键词，固定目录仍不能输出交易指令或收益保证。
+- 用户输入作为 React 文本渲染，不是模型指令通道。
+- 正负财务证据只描述正基数年度同比的方向；价格证据描述已验证观测区间的价格涨跌方向，均不代表投资吸引力。
+- 收入和利润增长方向相反时，混合观察引用两项证据，不编造成因。正净利润率不代表竞争优势；缺少基准时明确未知。零增长或缺数据不强制生成方向结论。
+- 未接入的数据维度不会获得虚构来源 ID；过时年度和未验证时效性均披露。
 
-Only after this success was local `LLM_MODEL` updated; the API key and all other
-variables remained unchanged. A subsequent full StockLens research request with
-real Fuyao data returned `interpretation_mode="llm"`, three validated interpretations,
-and complete financial metrics. No provider-specific production code change or
-safety relaxation was necessary. Restart any existing backend process to load
-the updated `.env`; already exported environment variables still take precedence.
+Phase 1 的 Decimal 计算、正基数规则、单位和期间核验、重复拒绝及原始响应哈希保持有效。前端在显示前还检查 Schema 和引用图；卡片通过 decimal.js 保留两位小数，证据面板保留完整值与原始 JSON。
 
-## Phase 2 price evidence
+## 历史实验：Gemini OpenAI-compatible 核验（2026-10-20）
 
-Historical price findings are generated from validated daily observations. The
-price-return interpretation is a fixed Chinese catalog entry, with the exact
-available calculation evidence ID. Model output remains IDs only: arbitrary
-prose, numbers, new claims or altered evidence references are rejected. Price
-references are checked against the union of financial and price evidence; the
-financial calculations and existing reference checks remain unchanged. Annual
-expansion/contraction templates are never applied to price findings.
+当时目标是 `gemini-2.5-flash`，地址为 `https://generativelanguage.googleapis.com/v1beta/openai`。Google 的[兼容指南](https://ai.google.dev/gemini-api/docs/openai#structured-output)记录了 Bearer Chat Completions 和结构化输出。实现保留 `response_format=json_schema`、`strict=true`、`max_completion_tokens=1000`，未自动替换模型、降低 Schema 或修改证据规则。
 
-The catalog explicitly excludes predictions, dividend-inclusive return claims,
-and causal claims connecting financial events to stock-price movements. Missing
-prices create no price interpretation candidate. Compliance-sensitive questions
-still bypass the model, and model failures still return deterministic facts.
-A real Phase 2 research call returned HTTP 200, 15 valid price observations and
-`interpretation_mode="llm"`, including `interpret_price_return` with validated
-references. No credentials or raw provider errors were printed.
+一次真实调用使用明确标记的合成测试观察，不包含真实报表或原始用户问题，返回 HTTP 404，响应不可读／非 JSON。后端保持 deterministic，接受零条解读。这不能证明 strict 或 token 参数的实际支持情况；仅凭 404 不足以修改参数。Google Cloud 的另一套 [Vertex-compatible interface](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/call-vertex-using-openai-library)说明 `max_completion_tokens` 是 `max_tokens` 的别名，但不能据此证明 Developer API 的本次端点。
 
-### Sanitized fallback diagnostics
+当时参考了[模型生命周期通知](https://ai.google.dev/gemini-api/docs/deprecations/)，将 2.5 访问限制作为可能解释；原始 404 根因仍未证实。这是历史假设，不是当前模型权限政策声明。应先检查模型权限与端点／网络，再决定是否重试。该次实验未修改本地 `.env`、模型选择、生产 AI 代码、财务逻辑或前端，未输出密钥或敏感请求头。
 
-Fallback logging now records only fixed reason codes and optional HTTP status:
-configuration, safety bypass, insufficient evidence, timeout, provider HTTP or
-connection failure, HTTP 429, malformed output, duplicate/unknown interpretation
-IDs, repeated wording and invalid evidence references. It never logs credentials,
-prompts, raw provider bodies or exception messages. Schema, reference checks and
-the 0.90 wording-similarity threshold are unchanged. Malformed response objects
-also safely fall back instead of raising an uncaught attribute error.
+对应 mock 测试覆盖精确 URL、Schema/token 参数、证据引用、HTTP 404 脱敏回退、畸形输出、伪造引用和不支持的数值文案。mock 成功不等于真实供应商成功。
 
-The earlier deterministic live response cannot be retrospectively attributed to
-a specific cause because the original code had no categorized diagnostics. One
-subsequent Gemini-only probe using explicitly synthetic test evidence completed
-in approximately 3.1 seconds with `interpretation_mode="llm"`; all three distinct
-catalog entries passed. All 15 valid nonempty combined-catalog selections and
-orderings pass offline validation. This does not guarantee provider availability.
+## 历史实验：替代模型验证（2026-10-20）
+
+随后从带认证的官方模型列表选择 `gemini-3.5-flash-lite`，并成功完成真实验证，取代此前未成功的 2.5 方案。[官方模型页](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)说明结构化输出能力；在当时环境中，基础 Chat Completions 与原有严格 Schema 请求均返回 HTTP 200，`max_completion_tokens=1000` 和 `strict=true` 无需调整。这仅验证 StockLens 当前 Schema，不等于验证所有 JSON Schema。
+
+成功后才更新本地 `LLM_MODEL`，key 和其他变量保持不变。后续完整 StockLens 请求使用真实 Fuyao 数据，得到完整财务指标、`interpretation_mode="llm"` 和三项有有效证据的解读，无需供应商专用参数补丁或安全降级。已有后端进程需重启加载新 `.env`，导出变量仍优先。
+
+## 历史实验：Phase 2 价格证据
+
+历史价格发现来自验证过的日线。价格解读是固定中文目录项，精确引用可用的价格计算证据；模型仍只返回 ID。引用核验覆盖财务与价格证据的并集，不把年度扩张／收缩模板套用于价格。
+
+目录不支持价格预测、含分红总收益解释或财务事件导致股价变化的因果断言。缺价格不产生价格解读；敏感问题绕过模型，模型失败保留确定性事实。
+
+一次真实 Phase 2 请求返回 HTTP 200、15 条有效行情及 `interpretation_mode="llm"`，其中包括验证过引用的 `interpret_price_return`。未输出财务数值、凭据、敏感请求头或供应商原始错误。
+
+## 当前验证边界
+
+自动化测试通过 mock 覆盖有效选择、引用错误、额外文案、拒绝、超时、畸形输出、敏感问题及回退。有限真实调用包括成功和失败，不能保证持续在线。最新已有结果和公网视觉确认见 [TESTING.md](TESTING.md)，本次文档中文化未新增应用测试或付费调用。
+
+负责人确认过公网解读展示，不代表本代理独立完成全部截图和交互验证。交易日历完整性仍未核验；缓存、公开限流和广泛语义理解未完成。具体个人操作无记录时，只描述为审阅或迭代，不补造独立实现经历。
