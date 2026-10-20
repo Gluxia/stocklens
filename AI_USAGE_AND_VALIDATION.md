@@ -148,3 +148,20 @@ still bypass the model, and model failures still return deterministic facts.
 A real Phase 2 research call returned HTTP 200, 15 valid price observations and
 `interpretation_mode="llm"`, including `interpret_price_return` with validated
 references. No credentials or raw provider errors were printed.
+
+### Sanitized fallback diagnostics
+
+Fallback logging now records only fixed reason codes and optional HTTP status:
+configuration, safety bypass, insufficient evidence, timeout, provider HTTP or
+connection failure, HTTP 429, malformed output, duplicate/unknown interpretation
+IDs, repeated wording and invalid evidence references. It never logs credentials,
+prompts, raw provider bodies or exception messages. Schema, reference checks and
+the 0.90 wording-similarity threshold are unchanged. Malformed response objects
+also safely fall back instead of raising an uncaught attribute error.
+
+The earlier deterministic live response cannot be retrospectively attributed to
+a specific cause because the original code had no categorized diagnostics. One
+subsequent Gemini-only probe using explicitly synthetic test evidence completed
+in approximately 3.1 seconds with `interpretation_mode="llm"`; all three distinct
+catalog entries passed. All 15 valid nonempty combined-catalog selections and
+orderings pass offline validation. This does not guarantee provider availability.

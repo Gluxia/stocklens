@@ -184,3 +184,18 @@ identical interpretations, and Chinese catalog localization. The historical-pric
 calculations, financial calculations and three original scripts remain unchanged
 by these final presentation and interpretation refinements. Browser UI acceptance
 was reported by the project owner; automated UI checks use jsdom.
+
+### Final diagnostic regression review
+
+The complete backend suite now passes **172 tests**; the frontend suite passes
+**32 tests**. Explicit TypeScript checking and the production build pass. New
+coverage checks sanitized reason classification, no sensitive log content,
+configuration rejection, timeout, HTTP/quota/connection errors, malformed output,
+duplicate/unknown IDs, repeated wording, invalid evidence references and all 15
+valid combined-catalog selections/orderings. Evidence records remain unchanged
+through fallback. No additional provider calls were made for this release review.
+
+Remaining manual browser checks: chart/tooltips and responsive layout, disclosure
+keyboard behavior, evidence-drawer focus restoration, and a complete follow-up
+journey in the actual browser. The owner previously approved the local UI, but the
+agent's browser automation was unavailable during the final validation.
