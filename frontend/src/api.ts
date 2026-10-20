@@ -1,0 +1,134 @@
+import { z } from 'zod'
+import Decimal from 'decimal.js'
+
+const numeric = z.string().refine(value => {
+  try { return new Decimal(value).isFinite() } catch { return false }
+}, '无效的十进制数值')
+const status = z.enum(['available', 'unavailable'])
+const evidenceSchema = z.object({
+  evidence_id: z.string(), kind: z.enum(['source', 'calculation']), source_id: z.string(),
+  data_source: z.string(), endpoint: z.string(), original_field_name: z.string().nullable(),
+  json_path: z.string().nullable(), reporting_period: z.string(), period_end: z.string(),
+  value: numeric.nullable(), unit: z.string().nullable(), formula: z.string().nullable(),
+  input_evidence_ids: z.array(z.string()), retrieved_at: z.string().datetime({ offset: true }),
+  status, reason: z.string().nullable(), metadata_json_paths: z.record(z.string(), z.string()),
+})
+export const diagnosisSchema = z.object({
+  stock_code: z.literal('600519.SH'), status: z.enum(['complete', 'partial', 'unavailable']),
+  current_year: z.number().int().nullable(), previous_year: z.number().int().nullable(),
+  calculation_version: z.string(), decimal_precision: z.number(), rounding: z.string(),
+  issues: z.array(z.string()),
+  metrics: z.array(z.object({ name: z.string(), value: numeric.nullable(), unit: z.string(), status, reason: z.string().nullable(), evidence_id: z.string() })),
+  evidence: z.array(evidenceSchema),
+  sources: z.array(z.object({ source_id: z.string(), endpoint: z.string(), parameters: z.record(z.string(), z.unknown()), retrieved_at: z.string().datetime({ offset: true }), sha256: z.string(), raw_json: z.string(), contract_url: z.string(), reporting_basis: z.string(), unit_basis: z.string() })),
+})
+export type Diagnosis = z.infer<typeof diagnosisSchema>
+export type Evidence = z.infer<typeof evidenceSchema>
+export type Metric = Diagnosis['metrics'][number]
+
+export async function fetchDiagnosis(signal?: AbortSignal): Promise<Diagnosis> {
+  const response = await fetch('/api/diagnosis?stock_code=600519.SH', { signal, headers: { Accept: 'application/json' } })
+  let body: unknown
+  try { body = await response.json() } catch { throw new Error('服务响应无法解析，请确认后端服务已启动。') }
+  if (!response.ok) {
+    const error = z.object({ error: z.object({ code: z.string(), message: z.string() }) }).safeParse(body)
+    throw new Error(error.success ? apiErrorText(error.data.error.code, response.status) : `研究请求未完成（HTTP ${response.status}），请检查后端服务后重试。`)
+  }
+  const parsed = diagnosisSchema.safeParse(body)
+  if (!parsed.success) throw new Error('响应未通过财务证据格式校验，本次未展示结果。')
+  return parsed.data
+}
+export const labels: Record<string, string> = { revenue_growth: '营业收入同比增长率', net_profit_growth: '净利润同比增长率', net_profit_margin: '净利润率' }
+export function formatMetric(metric: Metric) {
+  if (metric.status !== 'available' || metric.value === null) return '暂不可用'
+  return `${new Decimal(metric.value).toFixed(2)}${metric.unit === '%' ? '%' : ` ${metric.unit}`}`
+}
+export function formatDate(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short', timeZoneName: undefined }).format(new Date(value))
+}
+const reasons: Record<string, string> = {
+  missing_value: '原始字段缺失', invalid_number: '原始数值无效', missing_or_invalid_input: '计算所需数据缺失或无效',
+  zero_denominator: '分母为零，无法计算', negative_growth_baseline: '上年基数为负，不适用常规同比增长率',
+  nonpositive_revenue: '营业收入非正，无法计算该净利润率', no_financial_data: '未获取到财务数据',
+  missing_previous_year: '缺少相邻上一年度数据',
+}
+export function reasonText(value: string | null): string {
+  if (!value) return '证据不足'
+  if (reasons[value]) return reasons[value]
+  const missingYear = /^missing_previous_year: (\d{4})$/.exec(value)
+  if (missingYear) return `缺少 ${missingYear[1]} 年度数据`
+  const fieldIssue = /^(\d{4})\.(operating_income|net_profit): (.+)$/.exec(value)
+  if (fieldIssue) return `${fieldIssue[1]} 年度${fieldIssue[2] === 'operating_income' ? '营业收入' : '净利润'}：${reasonText(fieldIssue[3])}`
+  const metricIssue = /^(revenue_growth|net_profit_growth|net_profit_margin): (.+)$/.exec(value)
+  if (metricIssue) return `${labels[metricIssue[1]]}：${reasonText(metricIssue[2])}`
+  return '数据异常或说明尚待核验，请查看原始证据'
+}
+const errorMessages: Record<string, string> = {
+  missing_api_key: '后端尚未配置 Fuyao API 密钥，请检查服务配置。', upstream_timeout: 'Fuyao 数据请求超时，请稍后重试。',
+  upstream_rate_limited: 'Fuyao 请求频率或额度已达限制，请稍后重试或检查额度。', upstream_http_error: '暂时无法获取 Fuyao 数据，请检查服务连接后重试。',
+  upstream_api_error: 'Fuyao 返回业务错误，本次未生成研究结果。', invalid_json: '数据源响应无法解析，本次未展示财务结果。',
+  invalid_response: '数据源响应格式异常，本次未展示财务结果。', invalid_record: '数据源记录无效，请核验原始数据。',
+  invalid_reporting_period: '报告期信息未通过核验，本次未进行比较。', stock_mismatch: '数据源股票代码与所选股票不一致。',
+  unverified_unit: '数据单位或币种尚未通过核验，本次未展示计算结果。', duplicate_reporting_period: '存在重复报告期，无法确定适用记录。',
+  invalid_stock_code: '股票代码格式无效，请使用 600519.SH。', unsupported_stock: '当前版本仅支持贵州茅台（600519.SH）。',
+}
+export const apiErrorText = (code: string, status: number) => errorMessages[code] ?? `研究请求未完成（HTTP ${status}），请稍后重试。`
+export function requestErrorText(failure: unknown) {
+  if (failure instanceof Error && /[\u3400-\u9fff]/.test(failure.message)) return failure.message
+  return '无法连接研究服务，请检查网络及后端服务后重试。'
+}
+
+export function classify(report: Diagnosis) {
+  // Only a change relative to a positive prior-year baseline is classified.
+  const eligible = report.metrics.filter(metric => {
+    const ev = report.evidence.find(e => e.evidence_id === metric.evidence_id)
+    return ['revenue_growth', 'net_profit_growth'].includes(metric.name) && metric.unit === '%' && metric.status === 'available' && metric.value !== null && ev?.status === 'available' && ev.kind === 'calculation' && ev.value === metric.value && ev.input_evidence_ids.length === 2 && ev.input_evidence_ids.every(id => report.evidence.some(input => input.evidence_id === id && input.kind === 'source' && input.status === 'available'))
+  })
+  return {
+    positive: eligible.filter(m => new Decimal(m.value!).gt(0)),
+    negative: eligible.filter(m => new Decimal(m.value!).lt(0)),
+    unknown: report.metrics.filter(m => m.status !== 'available' || m.value === null),
+  }
+}
+
+export const planSchema = z.object({
+  company_name: z.string(), company_type: z.string(), company_type_basis: z.string(), routing_method: z.string(),
+  safety_notice: z.string().nullable(),
+  dimensions: z.array(z.object({ id: z.string(), label: z.string(), reason: z.string(), availability: z.enum(['available', 'unavailable']) })),
+})
+const findingSchema = z.object({ id: z.string(), category: z.enum(['positive', 'negative', 'mixed', 'unknown']), kind: z.enum(['observation', 'limitation']), title: z.string(), text: z.string(), evidence_ids: z.array(z.string()), dimension: z.string() })
+export const researchSchema = z.object({
+  question: z.string(), plan: planSchema, diagnosis: diagnosisSchema,
+  findings: z.array(findingSchema), observations: z.array(findingSchema),
+  interpretation_mode: z.enum(['llm', 'deterministic']), interpretation_status: z.string(),
+  interpretations: z.array(z.object({ id: z.string(), text: z.string(), evidence_ids: z.array(z.string()) })),
+  freshness: z.string(), freshness_status: z.enum(['recent_annual_period', 'stale', 'unknown']),
+  follow_up_questions: z.array(z.string()), disclaimer: z.string(),
+}).superRefine((report, context) => {
+  const ids = new Set(report.diagnosis.evidence.map(e => e.evidence_id))
+  const sourceIds = new Set(report.diagnosis.sources.map(s => s.source_id))
+  if (ids.size !== report.diagnosis.evidence.length || sourceIds.size !== report.diagnosis.sources.length ||
+      report.diagnosis.metrics.some(m => !ids.has(m.evidence_id)) ||
+      report.diagnosis.evidence.some(e => !sourceIds.has(e.source_id) || e.input_evidence_ids.some(id => !ids.has(id))) ||
+      [...report.findings, ...report.observations, ...report.interpretations].some(f => f.evidence_ids.some(id => !ids.has(id)))) {
+    context.addIssue({ code: 'custom', message: '证据引用无效' })
+  }
+})
+export type Plan = z.infer<typeof planSchema>
+export type ResearchReport = z.infer<typeof researchSchema>
+export type Finding = z.infer<typeof findingSchema>
+
+async function post<T>(path: string, question: string, schema: z.ZodType<T>, signal: AbortSignal): Promise<T> {
+  const response = await fetch(path, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ stock_code: '600519.SH', question }) })
+  let body: unknown
+  try { body = await response.json() } catch { throw new Error('服务响应无法解析，请确认后端服务已启动。') }
+  if (!response.ok) {
+    const parsed = z.object({ error: z.object({ code: z.string(), message: z.string() }) }).safeParse(body)
+    throw new Error(parsed.success ? apiErrorText(parsed.data.error.code, response.status) : `研究请求未完成（HTTP ${response.status}），请检查后端服务后重试。`)
+  }
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) throw new Error('响应未通过格式或证据引用校验，本次未展示财务报告。')
+  return parsed.data
+}
+export const fetchPlan = (question: string, signal: AbortSignal) => post('/api/plan', question, planSchema, signal)
+export const fetchResearch = (question: string, signal: AbortSignal) => post('/api/research', question, researchSchema, signal)
