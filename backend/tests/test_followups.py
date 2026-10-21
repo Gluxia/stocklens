@@ -45,11 +45,12 @@ def test_context_routing_and_evidence_stock_isolation(code):
         assert all(c['stock_code'] == code and set(c['evidence_ids']) <= refs for c in r.follow_up_suggestions)
 
 
-def test_repeated_original_filtered_and_missing_data_pending():
+def test_repeated_original_filtered_and_missing_data_does_not_disable_capability():
     r = report(question='同一年度区间的营业收入与净利润同比增长表现有何差异？')
     assert 'annual_comparison' not in {c.id for c in candidates(r)}
     r.diagnosis.metrics = []
-    assert all(c.availability == 'pending' for c in candidates(r) if c.id != 'price_performance')
+    assert next(c for c in candidates(r) if c.id == 'margin_limits').availability == 'supported'
+    assert not next(c for c in candidates(r) if c.id == 'margin_limits').evidence_ids
     price_query = next(c for c in candidates(r) if c.id == 'price_performance')
     assert price_query.availability == 'supported' and not price_query.evidence_ids
     manufacturing = candidates(report('300750.SZ'))
@@ -223,12 +224,14 @@ def test_pending_only_model_choice_falls_back_when_supported_questions_exist(mon
     assert post.call_count == 1
 
 
-def test_incomplete_financial_evidence_never_marked_supported():
+def test_incomplete_financial_evidence_not_cited_but_research_still_supported():
     r = report(question='请研究这家公司')
     missing = next(m for m in r.diagnosis.metrics if m.name == 'net_profit_margin')
     next(e for e in r.diagnosis.evidence if e.evidence_id == missing.evidence_id).status = 'unavailable'
     catalog = candidates(r)
-    assert not any(c.id == 'margin_limits' and c.availability == 'supported' for c in catalog)
+    margin = next(c for c in catalog if c.id == 'margin_limits')
+    assert margin.availability == 'supported'
+    assert not margin.evidence_ids and not margin.reporting_periods
     assert next(c for c in catalog if c.id == 'annual_comparison').availability == 'supported'
 
 
@@ -284,3 +287,163 @@ def test_margin_already_explained_in_report_limitations_is_not_recommended():
     r = report(question='过去一个月股价表现如何？')
     assert any(f.id == 'margin_context' for f in r.findings)
     assert 'margin_limits' not in {c.id for c in candidates(r)}
+
+
+@pytest.mark.parametrize('code', CODES)
+def test_price_causality_missing_financials_offers_supported_comparison_and_fetches_again(code, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app.main import app, get_fuyao_client
+    monkeypatch.delenv('LLM_API_KEY', raising=False)
+    from backend.tests.test_prices import START, END
+    monkeypatch.setattr('backend.app.main.price_window', lambda: (START, END))
+    fake = Mock()
+    fake.annual_income_statements.side_effect = [DiagnosisError('upstream_timeout', 'Synthetic timeout'), financial(code)]
+    fake.historical_prices.side_effect = daily
+    app.dependency_overrides[get_fuyao_client] = lambda: fake
+    try:
+        client = TestClient(app)
+        first = client.post('/api/research', json={'stock_code': code, 'question': '为什么最近股价上涨？'}).json()
+        assert first['answer']['intent_id'] == 'price_causality'
+        assert first['answer']['supporting_evidence_ids']
+        assert first['diagnosis']['status'] == 'unavailable'
+        item = next(c for c in first['follow_up_suggestions'] if c['id'] == 'annual_comparison')
+        assert item['availability'] == 'supported'
+        assert item['evidence_ids'] == [] and item['reporting_periods'] == []
+        assert not any(c['id'] == 'price_performance' for c in first['follow_up_suggestions'])
+        second = client.post('/api/research', json={'stock_code': code, 'question': item['question']}).json()
+        assert second['answer']['intent_id'] == 'growth_comparison'
+        assert second['answer']['answer_status'] == 'answered'
+        assert len(second['answer']['supporting_evidence_ids']) == 2
+        assert set(second['answer']['supporting_evidence_ids']) <= {e['evidence_id'] for e in second['diagnosis']['evidence']}
+        assert second['diagnosis']['stock_code'] == code
+        assert all(s['parameters']['thscode'] == code for s in second['diagnosis']['sources'])
+        assert fake.annual_income_statements.call_count == 2
+        assert fake.historical_prices.call_count == 1
+        assert all(call.args[0] == code for call in fake.annual_income_statements.call_args_list)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize('code', CODES)
+def test_answered_financial_research_offers_price_capability_then_fetches_prices(code, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app.main import app, get_fuyao_client
+    monkeypatch.delenv('LLM_API_KEY', raising=False)
+    from backend.tests.test_prices import START, END
+    monkeypatch.setattr('backend.app.main.price_window', lambda: (START, END))
+    fake = Mock()
+    fake.annual_income_statements.side_effect = financial
+    fake.historical_prices.side_effect = daily
+    app.dependency_overrides[get_fuyao_client] = lambda: fake
+    try:
+        client = TestClient(app)
+        first = client.post('/api/research', json={'stock_code': code, 'question': '营业收入与净利润的同比增长表现有何差异？'}).json()
+        assert first['answer']['answer_status'] == 'answered'
+        assert first['price_analysis'] is None
+        item = next(c for c in first['follow_up_suggestions'] if c['id'] == 'price_performance')
+        assert item['availability'] == 'supported' and not item['evidence_ids']
+        second = client.post('/api/research', json={'stock_code': code, 'question': item['question']}).json()
+        assert second['answer']['intent_id'] == 'price_performance'
+        assert second['price_analysis']['observations']
+        assert fake.historical_prices.call_count == 1
+        assert fake.historical_prices.call_args.args[0] == code
+        assert all(s['parameters']['thscode'] == code for s in second['price_analysis']['sources'])
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize('code', CODES)
+@pytest.mark.parametrize('question,excluded', [
+    ('营业收入与净利润的同比增长表现有何差异？', 'annual_comparison'),
+    ('净利润率能说明什么？', 'margin_limits'),
+    ('为什么最近股价上涨？', 'price_performance'),
+    ('评估估值水平还缺少哪些证据？', 'valuation_gap'),
+    ('经营现金流能否支持账面利润？', 'cashflow_gap'),
+    ('研发投入和产能利用情况如何？', 'manufacturing_gap'),
+])
+def test_primary_answer_topic_filtered_even_without_keyword_or_finding_clues(code, question, excluded):
+    from backend.app.answers import build_answer
+    r = report(code, question)
+    r.answer = build_answer(r)
+    r.question = '继续了解这家公司'
+    r.findings = []; r.interpretations = []
+    # No financial evidence in this snapshot must not disable the next financial request.
+    r.diagnosis.metrics = []
+    catalog = candidates(r)
+    assert excluded not in {c.id for c in catalog}
+    pending = [c for c in catalog if c.availability == 'pending']
+    assert len(pending) <= 1
+    if pending:
+        assert catalog[-1] == pending[0]
+    assert all(c.stock_code == code for c in catalog)
+    assert all(c.availability == 'supported' for c in catalog if c.id in ('annual_comparison', 'margin_limits', 'price_performance'))
+
+
+def test_foreign_answer_scope_rejected_before_followup_selection():
+    from backend.app.answers import build_answer
+    r = report(question='为什么最近股价上涨？')
+    r.answer = build_answer(r)
+    r.answer.scope.stock_code = '002594.SZ'
+    with pytest.raises(DiagnosisError):
+        candidates(r)
+
+
+@pytest.mark.parametrize('code', CODES)
+@pytest.mark.parametrize('financial_failure', [False, True])
+def test_price_timeout_keeps_supported_financial_topics_despite_background(code, financial_failure, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app.main import app, get_fuyao_client
+    from backend.app.research import Interpretation
+
+    fake = Mock()
+    if financial_failure:
+        fake.annual_income_statements.side_effect = DiagnosisError('upstream_timeout', 'Synthetic financial timeout')
+    else:
+        fake.annual_income_statements.side_effect = financial
+    fake.historical_prices.side_effect = DiagnosisError('upstream_timeout', 'Synthetic price timeout')
+
+    def background_interpretations(r):
+        # Simulate valid constrained selections without calling a model or changing its contract.
+        if r.diagnosis.metrics:
+            growth = [m.evidence_id for m in r.diagnosis.metrics if m.name in ('revenue_growth', 'net_profit_growth')]
+            margin = [m.evidence_id for m in r.diagnosis.metrics if m.name == 'net_profit_margin']
+            r.interpretations = [Interpretation(id='interpret_growth_comparison', text='Synthetic annual background', evidence_ids=growth),
+                                Interpretation(id='interpret_margin', text='Synthetic accounting background', evidence_ids=margin)]
+            r.interpretation_mode = 'llm'
+        return r
+
+    monkeypatch.setattr('backend.app.main.add_interpretation', background_interpretations)
+    app.dependency_overrides[get_fuyao_client] = lambda: fake
+    try:
+        response = TestClient(app).post('/api/research', json={'stock_code': code, 'question': '为什么最近股价上涨？'})
+        assert response.status_code == 200
+        body = response.json()
+        assert body['answer']['intent_id'] == 'price_causality'
+        assert body['answer']['answer_status'] == 'unavailable'
+        assert not body['answer']['supporting_evidence_ids']
+        assert body['price_analysis']['error_code'] == 'upstream_timeout'
+        assert not body['price_analysis']['observations'] and not body['price_analysis']['metrics']
+        items = body['follow_up_suggestions']
+        assert [item['id'] for item in items[:2]] == ['annual_comparison', 'margin_limits']
+        assert all(item['availability'] == 'supported' and item['stock_code'] == code for item in items[:2])
+        if financial_failure:
+            assert all(not item['evidence_ids'] for item in items[:2])
+        assert 'price_performance' not in {item['id'] for item in items}
+        assert sum(item['availability'] == 'pending' for item in items) <= 1
+        assert items[-1]['availability'] == 'pending'
+        assert fake.historical_prices.call_count == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize('code', CODES)
+def test_background_comparison_does_not_override_margin_primary_answer(code):
+    from backend.app.answers import build_answer
+    from backend.app.research import Interpretation
+    r = report(code, '净利润率能说明什么？')
+    r.answer = build_answer(r)
+    refs = [m.evidence_id for m in r.diagnosis.metrics if m.name in ('revenue_growth', 'net_profit_growth')]
+    r.interpretations = [Interpretation(id='interpret_growth_comparison', text='Synthetic background comparison', evidence_ids=refs)]
+    catalog = candidates(r)
+    assert next(c for c in catalog if c.id == 'annual_comparison').availability == 'supported'
+    assert 'margin_limits' not in {c.id for c in catalog}

@@ -114,8 +114,33 @@ export const priceSchema = z.object({
 export type PriceAnalysis = z.infer<typeof priceSchema>
 export const reportEvidence = (report: { diagnosis: Diagnosis; price_analysis?: PriceAnalysis | null }) => [...report.diagnosis.evidence, ...(report.price_analysis?.evidence ?? [])]
 export const reportSources = (report: { diagnosis: Diagnosis; price_analysis?: PriceAnalysis | null }) => [...report.diagnosis.sources, ...(report.price_analysis?.sources ?? [])]
+const nonblank = z.string().trim().min(1)
+const date = z.iso.date()
+export const answerSchema = z.strictObject({
+  intent_id: z.enum(['price_performance', 'growth_comparison', 'margin_meaning', 'valuation_evidence_gap', 'cashflow_support', 'manufacturing_evidence_gap', 'price_causality', 'unsupported']),
+  answer_status: z.enum(['answered', 'partial', 'unavailable']),
+  direct_answer: nonblank,
+  supporting_evidence_ids: z.array(nonblank).default([]),
+  missing_evidence: z.array(z.strictObject({ code: nonblank, description: nonblank, reason: z.enum(['not_supported', 'not_returned', 'invalid', 'period_mismatch', 'unverified', 'provider_failure']) })).default([]),
+  scope: z.strictObject({
+    stock_code: stockCodeSchema, reporting_periods: z.array(nonblank).default([]),
+    price_requested_start: date.nullable().default(null), price_requested_end: date.nullable().default(null),
+    price_observed_start: date.nullable().default(null), price_observed_end: date.nullable().default(null),
+    time_zone: z.literal('Asia/Shanghai').default('Asia/Shanghai'), assumptions: z.array(nonblank).default([]),
+  }),
+}).superRefine((answer, context) => {
+  const scope = answer.scope
+  const intervals = [[scope.price_requested_start, scope.price_requested_end], [scope.price_observed_start, scope.price_observed_end]]
+  if (new Set(answer.supporting_evidence_ids).size !== answer.supporting_evidence_ids.length ||
+      (answer.answer_status !== 'answered' && !answer.missing_evidence.length) ||
+      intervals.some(([start, end]) => (start === null) !== (end === null) || (start !== null && end !== null && start > end)) ||
+      (scope.price_requested_start && scope.price_observed_start && (scope.price_observed_start < scope.price_requested_start || scope.price_observed_end! > scope.price_requested_end!))) {
+    context.addIssue({ code: 'custom', message: '主答案范围或缺口说明无效' })
+  }
+})
+export type Answer = z.infer<typeof answerSchema>
 export const researchSchema = z.object({
-  question: z.string(), plan: planSchema, diagnosis: diagnosisSchema, price_analysis: priceSchema.nullable().optional(),
+  question: z.string(), answer: answerSchema.nullable().optional(), plan: planSchema, diagnosis: diagnosisSchema, price_analysis: priceSchema.nullable().optional(),
   findings: z.array(findingSchema), observations: z.array(findingSchema),
   interpretation_mode: z.enum(['llm', 'deterministic']), interpretation_status: z.string(),
   interpretations: z.array(z.object({ id: z.string(), text: z.string(), evidence_ids: z.array(z.string()) })),
@@ -129,6 +154,21 @@ export const researchSchema = z.object({
   const metrics = [...report.diagnosis.metrics, ...(report.price_analysis?.metrics ?? [])]
   const ids = new Set(evidence.map(e => e.evidence_id))
   const sourceIds = new Set(sources.map(s => s.source_id))
+  if (report.answer) {
+    const byId = new Map(evidence.map(item => [item.evidence_id, item]))
+    // Validate the entire input chain, including availability and stock ownership.
+    const valid = (id: string, ancestors = new Set<string>()): boolean => {
+      const item = byId.get(id)
+      if (!item || ancestors.has(id) || item.status !== 'available' || item.value === null) return false
+      const source = sources.find(source => source.source_id === item.source_id)
+      if (!source || source.parameters.thscode !== report.diagnosis.stock_code || source.endpoint !== item.endpoint || source.retrieved_at !== item.retrieved_at) return false
+      return item.input_evidence_ids.every(input => valid(input, new Set([...ancestors, id])))
+    }
+    if (report.answer.scope.stock_code !== report.diagnosis.stock_code || report.answer.supporting_evidence_ids.some(id => !valid(id))) {
+      context.addIssue({ code: 'custom', message: '主答案证据引用无效' })
+    }
+  }
+
   if (report.follow_up_suggestions?.some(s => s.stock_code !== report.diagnosis.stock_code || s.evidence_ids.some(id => !evidence.some(e => e.evidence_id === id && e.status === 'available'))) ||
       new Set(report.follow_up_suggestions?.map(s => s.id)).size !== (report.follow_up_suggestions?.length ?? 0) ||
       report.plan.stock_code !== report.diagnosis.stock_code || sources.some(s => s.parameters.thscode !== report.diagnosis.stock_code) ||

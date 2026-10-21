@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from .answer_contract import Answer
 from .schemas import Diagnosis
 from .prices import PriceAnalysis
 from .stocks import get_stock
@@ -62,6 +63,7 @@ class Interpretation(BaseModel):
 
 class ResearchReport(BaseModel):
     question: str
+    answer: Answer | None = None
     plan: Plan
     diagnosis: Diagnosis
     price_analysis: PriceAnalysis | None = None

@@ -12,6 +12,7 @@ from typing import Literal
 
 from .research import ResearchReport, verify_report_stock
 from .stocks import get_stock
+from .errors import DiagnosisError
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +61,18 @@ def question_topics(question: str) -> set[str]:
 def candidates(report: ResearchReport) -> list[FollowUp]:
     verify_report_stock(report)
     stock = get_stock(report.diagnosis.stock_code)
+    if report.answer and report.answer.scope.stock_code != stock.stock_code:
+        raise DiagnosisError("stock_mismatch", "Answer stock does not match diagnosis.")
     sources = {s.source_id for s in report.diagnosis.sources + (report.price_analysis.sources if report.price_analysis else [])}
-    evidence = {e.evidence_id: e for e in report.diagnosis.evidence + (report.price_analysis.evidence if report.price_analysis else []) if e.status == 'available' and e.source_id in sources}
-    metrics = {m.name: m for m in report.diagnosis.metrics + (report.price_analysis.metrics if report.price_analysis else []) if m.status == 'available' and m.evidence_id in evidence}
+    evidence = {e.evidence_id: e for e in report.diagnosis.evidence + (report.price_analysis.evidence if report.price_analysis else []) if e.status == 'available' and e.value is not None and e.source_id in sources}
+    metrics = {m.name: m for m in report.diagnosis.metrics + (report.price_analysis.metrics if report.price_analysis else []) if m.status == 'available' and m.value is not None and m.evidence_id in evidence}
     result = []
 
     def add(id, question, dimension, required=(), implemented=True):
         refs = [metrics[key].evidence_id for key in required if key in metrics]
-        available = implemented and len(refs) == len(required)
+        # Capability is independent of this report snapshot; the next request revalidates data.
         result.append(FollowUp(id=id, question=question, dimension=dimension,
-            availability='supported' if available else 'pending', stock_code=stock.stock_code,
+            availability='supported' if implemented else 'pending', stock_code=stock.stock_code,
             evidence_ids=refs, reporting_periods=list(dict.fromkeys(evidence[ref].reporting_period for ref in refs))))
 
     # A supported new price inquiry uses the existing adapter on click, not cached price claims.
@@ -82,6 +85,16 @@ def candidates(report: ResearchReport) -> list[FollowUp]:
         add('manufacturing_gap', '研发投入和产能利用情况如何？', 'manufacturing', implemented=False)
 
     topics = question_topics(report.question)
+    # The primary answer also establishes the topic already addressed, even for an evidence gap.
+    # Do not infer that its background dimensions have all been answered.
+    answer_topics = {
+        'price_performance': 'price_performance', 'price_causality': 'price_performance',
+        'growth_comparison': 'annual_comparison', 'margin_meaning': 'margin_limits',
+        'valuation_evidence_gap': 'valuation_gap', 'cashflow_support': 'cashflow_gap',
+        'manufacturing_evidence_gap': 'manufacturing_gap',
+    }
+    if report.answer and report.answer.intent_id in answer_topics:
+        topics.add(answer_topics[report.answer.intent_id])
     unknown = {f.dimension for f in report.findings if f.kind == 'limitation'}
     if 'price_performance' in topics:
         priority = ['annual_comparison', 'margin_limits']
@@ -96,16 +109,19 @@ def candidates(report: ResearchReport) -> list[FollowUp]:
     answered = set()
     if report.price_analysis and report.price_analysis.observations and 'price_return' in metrics:
         answered.add('price_performance')
-    for candidate_id, interpretation_id in (('annual_comparison', 'interpret_growth_comparison'), ('margin_limits', 'interpret_margin')):
-        candidate = next(c for c in result if c.id == candidate_id)
-        if candidate.evidence_ids and any(item.id == interpretation_id and set(candidate.evidence_ids) <= set(item.evidence_ids) for item in report.interpretations):
-            answered.add(candidate_id)
-    margin = next(c for c in result if c.id == 'margin_limits')
-    if margin.evidence_ids and any(f.id == 'margin_context' and set(margin.evidence_ids) <= set(f.evidence_ids) for f in report.findings):
-        answered.add('margin_limits')
-    comparison = next(c for c in result if c.id == 'annual_comparison')
-    if comparison.evidence_ids and any(f.id == 'divergent_growth' and set(comparison.evidence_ids) <= set(f.evidence_ids) for f in report.findings):
-        answered.add('annual_comparison')
+    # With an Answer, generic financial background is not a completed dedicated inquiry.
+    # Preserve the legacy visible-answer heuristic only for reports without this layer.
+    if report.answer is None:
+        for candidate_id, interpretation_id in (('annual_comparison', 'interpret_growth_comparison'), ('margin_limits', 'interpret_margin')):
+            candidate = next(c for c in result if c.id == candidate_id)
+            if candidate.evidence_ids and any(item.id == interpretation_id and set(candidate.evidence_ids) <= set(item.evidence_ids) for item in report.interpretations):
+                answered.add(candidate_id)
+        margin = next(c for c in result if c.id == 'margin_limits')
+        if margin.evidence_ids and any(f.id == 'margin_context' and set(margin.evidence_ids) <= set(f.evidence_ids) for f in report.findings):
+            answered.add('margin_limits')
+        comparison = next(c for c in result if c.id == 'annual_comparison')
+        if comparison.evidence_ids and any(f.id == 'divergent_growth' and set(comparison.evidence_ids) <= set(f.evidence_ids) for f in report.findings):
+            answered.add('annual_comparison')
     original = normalized(report.question, stock)
     filtered = []
     for item in result:
