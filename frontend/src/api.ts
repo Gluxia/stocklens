@@ -49,7 +49,7 @@ export function formatMetric(metric: Metric) {
   return `${new Decimal(metric.value).toFixed(2)}${metric.unit === '%' ? '%' : ` ${metric.unit}`}`
 }
 export function formatDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short', timeZoneName: undefined }).format(new Date(value))
+  return `${new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Shanghai' }).format(new Date(value))}（北京时间）`
 }
 const reasons: Record<string, string> = {
   missing_value: '原始字段缺失', invalid_number: '原始数值无效', missing_or_invalid_input: '计算所需数据缺失或无效',
@@ -75,7 +75,7 @@ const errorMessages: Record<string, string> = {
   invalid_response: '数据源响应格式异常，本次未展示财务结果。', invalid_record: '数据源记录无效，请核验原始数据。',
   invalid_reporting_period: '报告期信息未通过核验，本次未进行比较。', stock_mismatch: '数据源股票代码与所选股票不一致。',
   unverified_unit: '数据单位或币种尚未通过核验，本次未展示计算结果。', duplicate_reporting_period: '存在重复报告期，无法确定适用记录。',
-  invalid_stock_code: '股票代码格式无效，请使用 600519.SH。', unsupported_stock: '当前仅支持贵州茅台、宁德时代、比亚迪三股票白名单。',
+  invalid_stock_code: '股票代码格式无效，请使用 600519.SH。', unsupported_stock: '当前支持贵州茅台、宁德时代和比亚迪，请选择其中一家公司。',
 }
 export const apiErrorText = (code: string, status: number) => errorMessages[code] ?? `研究请求未完成（HTTP ${status}），请稍后重试。`
 export function requestErrorText(failure: unknown) {
@@ -120,6 +120,8 @@ export const researchSchema = z.object({
   interpretation_mode: z.enum(['llm', 'deterministic']), interpretation_status: z.string(),
   interpretations: z.array(z.object({ id: z.string(), text: z.string(), evidence_ids: z.array(z.string()) })),
   freshness: z.string(), freshness_status: z.enum(['recent_annual_period', 'stale', 'unknown']),
+  follow_up_suggestions: z.array(z.object({ id: z.string(), question: z.string(), dimension: z.string(), availability: z.enum(['supported', 'pending']), stock_code: stockCodeSchema, evidence_ids: z.array(z.string()), reporting_periods: z.array(z.string()) })).max(4).optional(),
+  follow_up_mode: z.enum(['llm', 'deterministic']).optional(),
   follow_up_questions: z.array(z.string()), disclaimer: z.string(),
 }).superRefine((report, context) => {
   const evidence = reportEvidence(report)
@@ -127,7 +129,9 @@ export const researchSchema = z.object({
   const metrics = [...report.diagnosis.metrics, ...(report.price_analysis?.metrics ?? [])]
   const ids = new Set(evidence.map(e => e.evidence_id))
   const sourceIds = new Set(sources.map(s => s.source_id))
-  if (report.plan.stock_code !== report.diagnosis.stock_code || sources.some(s => s.parameters.thscode !== report.diagnosis.stock_code) ||
+  if (report.follow_up_suggestions?.some(s => s.stock_code !== report.diagnosis.stock_code || s.evidence_ids.some(id => !evidence.some(e => e.evidence_id === id && e.status === 'available'))) ||
+      new Set(report.follow_up_suggestions?.map(s => s.id)).size !== (report.follow_up_suggestions?.length ?? 0) ||
+      report.plan.stock_code !== report.diagnosis.stock_code || sources.some(s => s.parameters.thscode !== report.diagnosis.stock_code) ||
       ids.size !== evidence.length || sourceIds.size !== sources.length ||
       metrics.some(m => !ids.has(m.evidence_id)) ||
       evidence.some(e => !sourceIds.has(e.source_id) || e.input_evidence_ids.some(id => !ids.has(id))) ||

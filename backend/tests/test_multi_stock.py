@@ -75,7 +75,8 @@ def test_full_research_and_followup_keep_stock_and_source_identity(code):
         assert body['interpretation_mode']=='deterministic'
         if body['price_analysis']:
             assert len(body['price_analysis']['observations'])==2
-            assert body['follow_up_questions'][0]=='过去一个月的股价表现如何？'
+            assert body['follow_up_suggestions'][0]['id']=='price_coverage'
+            assert question not in body['follow_up_questions']
     followup=client.post('/api/research',json={'stock_code':code,'question':body['follow_up_questions'][0]})
     assert followup.status_code==200 and followup.json()['diagnosis']['stock_code']==code
     assert all(call.args[0]==code for call in fake.annual_income_statements.call_args_list)
@@ -186,8 +187,12 @@ def test_classification_uses_verified_business_sources_without_development_copy(
     }
     for stock in STOCKS:
         assert (stock.company_type, stock.source_url) == expected[stock.stock_code]
-        assert '人工审阅' in stock.classification_basis
-        assert '非自动行业识别' in stock.classification_basis
+        assert not any(term in stock.classification_basis for term in ('人工', '自动', '行业分类'))
+        assert stock.classification_basis in {
+            '主营茅台酒及茅台酱香系列酒的生产与销售。',
+            '主要从事动力电池与储能业务。',
+            '业务涵盖整车、电池及其他制造领域。',
+        }
         assert 'MVP' not in stock.classification_basis + stock.source
         plan = make_plan('请研究这家公司', stock.stock_code)
         assert plan.classification_source_url == stock.source_url

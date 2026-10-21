@@ -2232,3 +2232,37 @@ textarea {
 .supplementary-context[open] > summary { margin-bottom: 20px; }
 .diagnosis-section-title { margin-block: 24px 12px; }
 @media (max-width: 600px) { .supplementary-context { padding: 16px; } }
+
+
+/* Keep company sources distinct from primary research actions. */
+.company-profile-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid #F2B6C0;
+  border-radius: 6px;
+  color: var(--brand-hover);
+  background: var(--surface);
+  font-size: var(--type-meta, 14px);
+  font-weight: 500;
+  line-height: 1.6;
+  vertical-align: baseline;
+  overflow-wrap: anywhere;
+}
+
+.company-profile-link svg {
+  flex-shrink: 0;
+}
+
+.company-profile-link:hover {
+  background: var(--brand-subtle);
+  border-color: var(--brand);
+}
+
+.company-profile-link:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+  background: var(--brand-subtle);
+}

@@ -73,6 +73,8 @@ class ResearchReport(BaseModel):
     freshness: str
     freshness_status: Literal["recent_annual_period", "stale", "unknown"]
     follow_up_questions: list[str]
+    follow_up_suggestions: list[dict] = Field(default_factory=list)
+    follow_up_mode: Literal["llm", "deterministic"] = "deterministic"
     disclaimer: str = "Research observations only. No buy/sell recommendations or guaranteed returns. Annual results do not describe current trading conditions."
 
 

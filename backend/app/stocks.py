@@ -18,15 +18,15 @@ class Stock(BaseModel):
 
 STOCKS = (
     Stock(stock_code='600519.SH', name='贵州茅台', exchange='上海证券交易所', company_type='白酒消费企业',
-          classification_basis='依据公司官网披露的茅台酒及茅台酱香系列酒生产与销售业务，人工审阅为白酒消费企业；非自动行业识别。',
+          classification_basis='主营茅台酒及茅台酱香系列酒的生产与销售。',
           source='贵州茅台公司简介', source_url='https://www.moutai.com.cn/mtgf/qygk/gsjj/index.html',
           default_dimensions=['growth', 'profitability']),
     Stock(stock_code='300750.SZ', name='宁德时代', exchange='深圳证券交易所', company_type='电池与储能制造企业',
-          classification_basis='依据企业公开简介所述动力电池与储能业务，人工审阅为电池与储能制造企业；非自动行业识别。',
+          classification_basis='主要从事动力电池与储能业务。',
           source='宁德时代企业简介', source_url='https://www.catl.com/about/profile/',
           default_dimensions=['growth', 'profitability', 'manufacturing']),
     Stock(stock_code='002594.SZ', name='比亚迪', exchange='深圳证券交易所', company_type='汽车及多元制造企业',
-          classification_basis='依据企业公开简介所述整车、电池及多元业务，人工审阅为汽车及多元制造企业；合并指标不等于汽车分部业绩，非自动行业识别。',
+          classification_basis='业务涵盖整车、电池及其他制造领域。',
           source='比亚迪公司简介', source_url='https://www.bydglobal.com/cn/about',
           default_dimensions=['profitability', 'growth', 'manufacturing']),
 )

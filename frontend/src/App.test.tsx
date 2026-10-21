@@ -6,7 +6,7 @@ import { researchSchema, type ResearchReport } from './api'
 
 // These are synthetic test amounts and dates, not real company financials.
 const timestamp = '2025-10-20T00:00:00Z'
-const plan = { stock_code: '600519.SH', classification_source: '已审阅测试配置', classification_source_url: 'https://example.test/profile', company_name: '贵州茅台', company_type: '白酒消费企业', company_type_basis: '依据公开业务资料人工审阅；非自动行业识别。', routing_method: 'Deterministic', safety_notice: null, dimensions: [{ id: 'growth', label: 'Growth', reason: 'The question matched growth keywords.', availability: 'available' }] }
+const plan = { stock_code: '600519.SH', classification_source: '已审阅测试配置', classification_source_url: 'https://example.test/profile', company_name: '贵州茅台', company_type: '白酒消费企业', company_type_basis: '主营茅台酒及茅台酱香系列酒的生产与销售。', routing_method: 'Deterministic', safety_notice: null, dimensions: [{ id: 'growth', label: 'Growth', reason: 'The question matched growth keywords.', availability: 'available' }] }
 const source = { source_id: 'source-1', endpoint: 'https://fuyao.aicubes.cn/api/a-share/financials/income-statements', parameters: { thscode: '600519.SH' }, retrieved_at: timestamp, sha256: 'synthetic-checksum', raw_json: '{"synthetic":true}', contract_url: 'https://fuyao.aicubes.cn/docs/api-reference/financials/', reporting_basis: 'consolidated', unit_basis: 'Original currency yuan' }
 const evidence = { evidence_id: 'metric-1', kind: 'calculation', source_id: source.source_id, data_source: 'Fuyao', endpoint: source.endpoint, original_field_name: null, json_path: null, reporting_period: '2024 FY vs 2023 FY', period_end: '2024-12-31', value: '20', unit: '%', formula: '(current - previous) / previous * 100', input_evidence_ids: ['input-1', 'input-2'], retrieved_at: timestamp, status: 'available', reason: null, metadata_json_paths: {} }
 export const fixture = researchSchema.parse({
@@ -44,6 +44,8 @@ describe('Research journey', () => {
     const user = userEvent.setup(); render(<App />)
     expect(screen.queryByText('20.00%')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '开始研究' })).toBeDisabled()
+    expect(screen.getByText('当前支持 3 家 A 股公司')).toBeInTheDocument()
+    expect(screen.queryByText(/白名单|MVP 配置/)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /营业收入与净利润的同比增长表现有何差异/ }))
     expect(screen.getByLabelText('研究问题')).toHaveValue('营业收入与净利润的同比增长表现有何差异？')
     expect(mockFetch).not.toHaveBeenCalled()
@@ -53,9 +55,13 @@ describe('Research journey', () => {
     expect(await screen.findByText('20.00%')).toBeInTheDocument()
     expect(screen.getByText('问题中包含与成长能力相关的关键词，因此纳入研究。')).toBeInTheDocument()
     expect(screen.getByText('客观事实摘要')).toBeInTheDocument()
+    expect(screen.getByText('2025年10月20日 08:00（北京时间）')).toBeInTheDocument()
+    expect(screen.queryByText(/本地时间/)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /营业收入同比增长率 20.00%/ }))
     const drawer = screen.getByRole('dialog')
     expect(within(drawer).getByText('(current - previous) / previous * 100')).toBeInTheDocument()
+    expect(within(drawer).getByText('2025年10月20日 08:00（北京时间）')).toBeInTheDocument()
+    expect(within(drawer).getByText(timestamp)).toBeInTheDocument()
     await user.click(within(drawer).getByRole('button', { name: /operating_income 2024 年度/ }))
     expect(within(drawer).getByText('$.data.item[0].operating_income')).toBeInTheDocument()
     expect(within(drawer).getByText('人民币元（CNY）')).toBeInTheDocument()
@@ -96,7 +102,7 @@ describe('Research journey', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('无法连接研究服务')
     mockFetch.mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({ error: { code: 'unsupported_stock', message: 'Only 600519.SH is supported.' } }) })
     await user.click(screen.getByRole('button', { name: /重试/ }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('三股票白名单')
+    expect(await screen.findByRole('alert')).toHaveTextContent('当前支持贵州茅台、宁德时代和比亚迪')
   })
   it('shows loading state without invented progress or financial values', async () => {
     mockFetch.mockReturnValue(new Promise(() => {}))
@@ -212,6 +218,9 @@ describe('Historical price research', () => {
     expect(await screen.findByRole('heading', { name: '历史股价表现' })).toBeInTheDocument()
     expect(screen.getByRole('img', { name: /历史收盘价折线图/ })).toBeInTheDocument()
     expect(screen.getByText(/尚未核验交易日历/)).toBeInTheDocument()
+    expect(screen.getByText(/请求区间：2025-09-20 至 2025-10-19（北京时间）/)).toBeInTheDocument()
+    expect(screen.queryByText(/上海时区/)).not.toBeInTheDocument()
+    expect(screen.getByText(/获取于 2025年10月20日 08:00（北京时间）/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /观测区间价格涨跌幅\s+10.12%/ }))
     const drawer = screen.getByRole('dialog')
     expect(within(drawer).getByText('10.123456789')).toBeInTheDocument()
@@ -414,9 +423,45 @@ it.each(['600519.SH', '300750.SZ', '002594.SZ'] as const)('presents the same fou
   }
   expect(within(planning).getByText(report.plan.company_name, { exact: true })).toBeInTheDocument()
   expect(within(planning).getByText(report.plan.company_type, { exact: true })).toBeInTheDocument()
-  expect(within(planning).getByRole('link', { name: report.plan.classification_source })).toHaveAttribute('href', report.plan.classification_source_url)
+  const profileLink = within(planning).getByRole('link', { name: '查看公司简介' })
+  expect(profileLink).toHaveAttribute('href', report.plan.classification_source_url)
+  expect(profileLink).toHaveAttribute('target', '_blank')
+  expect(profileLink).toHaveAttribute('rel', 'noopener noreferrer')
+  expect(profileLink).toHaveClass('company-profile-link')
+  expect(profileLink.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
   expect(planning).toHaveTextContent('当前诊断重点：成长能力')
-  expect(planning).toHaveTextContent('人工审阅公开业务资料')
-  expect(planning).toHaveTextContent('不是自动行业识别或官方行业分类')
+  expect(within(planning).getAllByText('研究分类根据企业公开业务资料人工设置，不代表官方行业分类。')).toHaveLength(1)
+  expect(planning).not.toHaveTextContent('非自动行业识别')
   expect(planning).not.toHaveTextContent('MVP')
+})
+
+
+it.each(['600519.SH', '300750.SZ', '002594.SZ'] as const)('launches a curated follow-up with the current stock and labels pending data: %s', async code => {
+  render(<App />); const user = userEvent.setup()
+  await waitFor(() => expect(screen.getByLabelText('选择股票')).toBeEnabled())
+  await user.selectOptions(screen.getByLabelText('选择股票'), code)
+  const report = reportForStock(code)
+  report.follow_up_mode = 'llm'
+  report.follow_up_suggestions = [
+    { id: 'margin_limits', question: '年度净利润率反映什么？', dimension: 'profitability', availability: 'supported', stock_code: code, evidence_ids: ['metric-1'], reporting_periods: ['2024 FY vs 2023 FY'] },
+    { id: 'valuation_gap', question: '估值还缺哪些数据？', dimension: 'valuation', availability: 'pending', stock_code: code, evidence_ids: [], reporting_periods: [] },
+  ]
+  mockJourney(report)
+  await user.type(screen.getByLabelText('研究问题'), '营收如何？')
+  await user.click(screen.getByRole('button', { name: '开始研究' }))
+  expect(await screen.findByRole('button', { name: /估值还缺哪些数据？（待验证）/ })).toBeInTheDocument()
+  expect(screen.getByText(/建议由 AI 从审核目录中选取/)).toBeInTheDocument()
+  mockJourney(report)
+  await user.click(screen.getByRole('button', { name: /年度净利润率反映什么/ }))
+  await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(4))
+  expect(JSON.parse(mockFetch.mock.calls[3][1].body)).toEqual({ stock_code: code, question: '年度净利润率反映什么？' })
+})
+
+it('rejects follow-up suggestions with foreign stock or invalid evidence', () => {
+  const report = reportForStock('300750.SZ')
+  report.follow_up_suggestions = [{ id: 'bad', question: '问题', dimension: 'growth', availability: 'supported', stock_code: '002594.SZ', evidence_ids: [], reporting_periods: [] }]
+  expect(researchSchema.safeParse(report).success).toBe(false)
+  report.follow_up_suggestions[0].stock_code = '300750.SZ'
+  report.follow_up_suggestions[0].evidence_ids = ['foreign-evidence']
+  expect(researchSchema.safeParse(report).success).toBe(false)
 })

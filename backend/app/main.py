@@ -11,6 +11,7 @@ from .errors import DiagnosisError
 from .fuyao import FuyaoClient
 from .schemas import Diagnosis
 from .research import ResearchRequest, ResearchReport, make_plan, factual_report, attach_prices
+from .followups import add_followups
 from .llm import add_interpretation
 from .prices import PriceAnalysis, build_prices, price_window
 from .stocks import STOCKS, Stock
@@ -69,7 +70,7 @@ def research(request: ResearchRequest, client: FuyaoClient = Depends(get_fuyao_c
         except DiagnosisError as exc:
             prices = PriceAnalysis(requested_start=str(start), requested_end=str(end), error_code=exc.code, issues=[exc.code])
         attach_prices(result, prices)
-    return add_interpretation(result)
+    return add_followups(add_interpretation(result))
 
 
 # Development uses the Vite proxy. Production serves the compiled UI on the same origin.
