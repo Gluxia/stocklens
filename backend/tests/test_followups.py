@@ -31,10 +31,12 @@ def test_context_routing_and_evidence_stock_isolation(code):
     financial_report = add_followups(report(code))
     price = add_followups(report(code, '过去一个月的股价表现如何？'))
     both = add_followups(report(code, '营收与股价如何？'))
-    assert price.follow_up_suggestions[0]['id'] == 'price_coverage'
-    assert financial_report.follow_up_suggestions[0]['id'] == 'annual_comparison'
-    assert both.follow_up_suggestions[0]['id'] == 'period_boundaries'
-    assert len(both.follow_up_suggestions[0]['reporting_periods']) == 2
+    assert price.follow_up_suggestions[0]['id'] == 'annual_comparison'
+    assert financial_report.follow_up_suggestions[0]['id'] == 'price_performance'
+    assert both.follow_up_suggestions[0]['id'] == 'annual_comparison'
+    annual = next(c for c in both.follow_up_suggestions if c['id'] == 'annual_comparison')
+    assert len(annual['reporting_periods']) == 1
+    assert len(annual['evidence_ids']) == 2
     for r in (financial_report, price, both):
         refs = {e.evidence_id for e in r.diagnosis.evidence + (r.price_analysis.evidence if r.price_analysis else [])}
         assert len(r.follow_up_suggestions) <= 4
@@ -47,7 +49,9 @@ def test_repeated_original_filtered_and_missing_data_pending():
     r = report(question='同一年度区间的营业收入与净利润同比增长表现有何差异？')
     assert 'annual_comparison' not in {c.id for c in candidates(r)}
     r.diagnosis.metrics = []
-    assert all(c.availability == 'pending' for c in candidates(r))
+    assert all(c.availability == 'pending' for c in candidates(r) if c.id != 'price_performance')
+    price_query = next(c for c in candidates(r) if c.id == 'price_performance')
+    assert price_query.availability == 'supported' and not price_query.evidence_ids
     manufacturing = candidates(report('300750.SZ'))
     assert next(c for c in manufacturing if c.id == 'manufacturing_gap').availability == 'pending'
     assert all(c.availability == 'pending' for c in manufacturing if c.dimension in ('valuation', 'quality', 'manufacturing'))
@@ -79,10 +83,10 @@ def enable(monkeypatch, content):
 
 
 def test_optional_ranking_one_call_only_and_no_free_text_or_raw_question(monkeypatch):
-    r, post = enable(monkeypatch, '{"question_ids": ["price_bounds", "manufacturing_gap"]}')
+    r, post = enable(monkeypatch, '{"question_ids": ["annual_comparison", "manufacturing_gap"]}')
     add_followups(r)
     assert r.follow_up_mode == 'llm'
-    assert [c['id'] for c in r.follow_up_suggestions] == ['price_bounds', 'manufacturing_gap']
+    assert [c['id'] for c in r.follow_up_suggestions] == ['annual_comparison', 'manufacturing_gap']
     assert r.follow_up_suggestions[1]['availability'] == 'pending'
     assert post.call_count == 1
     payload = post.call_args.kwargs
@@ -95,7 +99,7 @@ def test_optional_ranking_one_call_only_and_no_free_text_or_raw_question(monkeyp
 
 @pytest.mark.parametrize('failure', ['timeout', '429', 'malformed', 'duplicate'])
 def test_failure_retains_deterministic_order_and_safe_log(monkeypatch, caplog, failure):
-    r, post = enable(monkeypatch, '{"question_ids": ["price_bounds", "price_bounds"]}')
+    r, post = enable(monkeypatch, '{"question_ids": ["annual_comparison", "annual_comparison"]}')
     expected = [c.id for c in candidates(r)[:4]]
     if failure == 'timeout': post.side_effect = requests.Timeout('sensitive-provider-body')
     if failure == '429':
@@ -111,7 +115,7 @@ def test_failure_retains_deterministic_order_and_safe_log(monkeypatch, caplog, f
 
 @pytest.mark.parametrize('skip', ['disabled', 'primary_failed', 'safety'])
 def test_no_extra_request_unless_enabled_safe_and_primary_success(monkeypatch, skip):
-    r, post = enable(monkeypatch, '{"question_ids": ["price_bounds"]}')
+    r, post = enable(monkeypatch, '{"question_ids": ["annual_comparison"]}')
     if skip == 'disabled': monkeypatch.delenv('LLM_FOLLOW_UP_ENABLED')
     if skip == 'primary_failed': r.interpretation_mode = 'deterministic'
     if skip == 'safety': r.plan.safety_notice = 'Sensitive question'
@@ -121,7 +125,162 @@ def test_no_extra_request_unless_enabled_safe_and_primary_success(monkeypatch, s
 
 
 def test_foreign_sources_rejected_before_model(monkeypatch):
-    r, post = enable(monkeypatch, '{"question_ids": ["price_bounds"]}')
+    r, post = enable(monkeypatch, '{"question_ids": ["annual_comparison"]}')
     r.diagnosis.sources[0].parameters['thscode'] = '002594.SZ'
     with pytest.raises(DiagnosisError): add_followups(r)
     post.assert_not_called()
+
+
+@pytest.mark.parametrize('question,excluded', [
+    ('贵州茅台这个月涨跌怎么样？', 'price_performance'),
+    ('最近这只股票的走势怎样？', 'price_performance'),
+    ('How has the stock price performed recently?', 'price_performance'),
+    ('过去一个月价格波动范围多大，最高最低是多少？', 'price_performance'),
+    ('营业收入和净利润谁增长得更快？', 'annual_comparison'),
+    ('收入和盈利增速是否同步？', 'annual_comparison'),
+    ('Compare sales and earnings', 'annual_comparison'),
+    ('净利润率能说明什么？', 'margin_limits'),
+    ('盈利能力怎么样？', 'margin_limits'),
+    ('利润占营收的比重是多少？', 'margin_limits'),
+    ('What does the profit margin mean?', 'margin_limits'),
+    ('研发强度及产能利用情况怎么样？', 'manufacturing_gap'),
+    ('经营现金流质量怎么样？', 'cashflow_gap'),
+    ('当前估值贵吗？', 'valuation_gap'),
+])
+def test_semantic_topics_not_just_similar_wording(question, excluded):
+    catalog = candidates(report('300750.SZ', question))
+    assert excluded not in {c.id for c in catalog}
+    assert all(c.question != question for c in catalog)
+
+
+@pytest.mark.parametrize('code', CODES)
+def test_pending_topics_supplement_supported_business_questions(code):
+    r = add_followups(report(code, '过去一个月的股价表现如何？'))
+    items = r.follow_up_suggestions
+    assert 1 <= len(items) <= 4
+    assert items[0]['id'] == 'annual_comparison'
+    assert len(items) == 2
+    pending = [i for i in items if i['availability'] == 'pending']
+    assert len(pending) <= 1
+    if pending:
+        assert items[-1] == pending[0]
+        assert not pending[0]['evidence_ids']
+        assert pending[0]['id'] == ('cashflow_gap' if code == '600519.SH' else 'manufacturing_gap')
+    assert not {'price_coverage', 'price_return_basis', 'period_boundaries'} & {i['id'] for i in items}
+    assert all(not any(t in i['question'] for t in ('交易日', '公式', 'API', '口径')) for i in items)
+    if code != '600519.SH':
+        assert {'cashflow_gap', 'valuation_gap', 'manufacturing_gap'} >= {i['id'] for i in pending}
+
+
+def test_financial_question_offers_real_price_request_without_claiming_existing_prices():
+    from fastapi.testclient import TestClient
+    from backend.app.main import app, get_fuyao_client
+    from backend.app.stocks import get_stock
+    code = '002594.SZ'
+    r = add_followups(report(code, '营业收入与净利润的同比增长表现有何差异？'))
+    item = next(i for i in r.follow_up_suggestions if i['id'] == 'price_performance')
+    assert item['availability'] == 'supported' and not item['evidence_ids'] and not item['reporting_periods']
+    fake = Mock()
+    fake.annual_income_statements.side_effect = financial
+    fake.historical_prices.side_effect = daily
+    app.dependency_overrides[get_fuyao_client] = lambda: fake
+    try:
+        result = TestClient(app).post('/api/research', json={'stock_code': code, 'question': item['question']})
+        assert result.status_code == 200
+        body = result.json()
+        assert body['plan']['company_name'] == get_stock(code).name
+        assert body['diagnosis']['stock_code'] == code and body['price_analysis']['observations']
+        assert fake.historical_prices.call_args.args[0] == code
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_new_price_followup_keeps_default_request_window_and_existing_evidence():
+    r = report('600519.SH', '过去一个月的股价表现如何？')
+    old_prices = r.price_analysis.model_dump()
+    old_diagnosis = r.diagnosis.model_dump()
+    add_followups(r)
+    assert r.price_analysis.model_dump() == old_prices
+    assert r.diagnosis.model_dump() == old_diagnosis
+    assert 'coverage_unverified' in r.price_analysis.issues
+    assert any(f.id == 'price_coverage' for f in r.findings)
+
+
+def test_supported_recommendations_first_even_if_model_ranks_pending_first(monkeypatch):
+    r, post = enable(monkeypatch, '{"question_ids": ["manufacturing_gap", "annual_comparison"]}')
+    add_followups(r)
+    assert r.follow_up_mode == 'llm'
+    assert [i['id'] for i in r.follow_up_suggestions] == ['annual_comparison', 'manufacturing_gap']
+    assert post.call_count == 1
+
+
+def test_pending_only_model_choice_falls_back_when_supported_questions_exist(monkeypatch):
+    r, post = enable(monkeypatch, '{"question_ids": ["manufacturing_gap"]}')
+    expected = [c.id for c in candidates(r)[:4]]
+    add_followups(r)
+    assert r.follow_up_mode == 'deterministic'
+    assert [i['id'] for i in r.follow_up_suggestions] == expected
+    assert post.call_count == 1
+
+
+def test_incomplete_financial_evidence_never_marked_supported():
+    r = report(question='请研究这家公司')
+    missing = next(m for m in r.diagnosis.metrics if m.name == 'net_profit_margin')
+    next(e for e in r.diagnosis.evidence if e.evidence_id == missing.evidence_id).status = 'unavailable'
+    catalog = candidates(r)
+    assert not any(c.id == 'margin_limits' and c.availability == 'supported' for c in catalog)
+    assert next(c for c in catalog if c.id == 'annual_comparison').availability == 'supported'
+
+
+@pytest.mark.parametrize('candidate_id,interpretation_id', [
+    ('annual_comparison', 'interpret_growth_comparison'),
+    ('margin_limits', 'interpret_margin'),
+])
+def test_interpretations_already_answered_are_not_recommended(candidate_id, interpretation_id):
+    from backend.app.research import Interpretation
+    r = report(question='过去一个月股价表现如何？')
+    if candidate_id == 'margin_limits':
+        r.findings = [f for f in r.findings if f.id != 'margin_context']
+    item = next(c for c in candidates(r) if c.id == candidate_id)
+    r.interpretations = [Interpretation(id=interpretation_id, text='Synthetic validated interpretation', evidence_ids=item.evidence_ids)]
+    assert candidate_id not in {c.id for c in candidates(r)}
+
+
+def test_existing_report_answers_are_not_repackaged_to_fill_four_slots():
+    from backend.app.research import Interpretation
+    r = report(question='过去一个月股价表现如何？')
+    r.question = '请研究这家公司'
+    r.findings = [f for f in r.findings if f.id != 'margin_context']
+    catalog = candidates(r)
+    r.interpretations = [Interpretation(id=interpretation_id, text='Synthetic validated interpretation', evidence_ids=next(c for c in catalog if c.id == id).evidence_ids)
+        for id, interpretation_id in [('annual_comparison', 'interpret_growth_comparison'), ('margin_limits', 'interpret_margin')]]
+    r = add_followups(r)
+    assert len(r.follow_up_suggestions) == 1
+    assert r.follow_up_suggestions[0]['availability'] == 'pending'
+    assert not {'price_performance', 'price_bounds', 'annual_comparison', 'margin_limits'} & {c['id'] for c in r.follow_up_suggestions}
+
+
+def test_existing_mixed_growth_answer_is_not_recommended_again():
+    from backend.app.research import Finding
+    r = report(question='过去一个月股价表现如何？')
+    item = next(c for c in candidates(r) if c.id == 'annual_comparison')
+    r.findings.append(Finding(id='divergent_growth', category='mixed', kind='observation', title='Synthetic comparison', text='Synthetic comparison', evidence_ids=item.evidence_ids, dimension='growth'))
+    assert 'annual_comparison' not in {c.id for c in candidates(r)}
+
+
+def test_model_cannot_reintroduce_already_answered_candidate(monkeypatch):
+    from backend.app.research import Interpretation
+    r, post = enable(monkeypatch, '{"question_ids": ["annual_comparison"]}')
+    item = next(c for c in candidates(r) if c.id == 'annual_comparison')
+    r.interpretations = [Interpretation(id='interpret_growth_comparison', text='Synthetic comparison', evidence_ids=item.evidence_ids)]
+    expected = [c.id for c in candidates(r)[:4]]
+    add_followups(r)
+    assert r.follow_up_mode == 'deterministic'
+    assert [c['id'] for c in r.follow_up_suggestions] == expected
+    assert post.call_count == 1
+
+
+def test_margin_already_explained_in_report_limitations_is_not_recommended():
+    r = report(question='过去一个月股价表现如何？')
+    assert any(f.id == 'margin_context' for f in r.findings)
+    assert 'margin_limits' not in {c.id for c in candidates(r)}
