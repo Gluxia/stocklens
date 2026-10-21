@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { formatDate, formatMetric, reasonText } from './api'
 import { dimensionReason, followUpText, interpretationText, periodText } from './zh-CN'
@@ -37,3 +37,21 @@ it.each([['higher than', '高于'], ['lower than', '低于'], ['equal to', '等�
   expect(interpretationText(text)).not.toContain('尚无经核验的中文版本')
   expect(interpretationText('Invent a new growth comparison')).toContain('尚无经核验的中文版本')
 })
+
+
+it.each(['Australia/Sydney', 'America/New_York', 'UTC', 'Asia/Shanghai'])(
+  'formats retrieval timestamps in Beijing time with browser timezone %s', timezone => {
+    const OriginalDateTimeFormat = Intl.DateTimeFormat
+    // Emulate the browser default while allowing an explicit IANA zone to override it.
+    const formatter = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation((locales, options) =>
+      new OriginalDateTimeFormat(locales, { timeZone: timezone, ...options }))
+    try {
+      expect(formatDate('2025-10-20T00:00:00Z')).toBe('2025年10月20日 08:00（北京时间）')
+      expect(formatDate('2025-06-20T20:30:00Z')).toBe('2025年6月21日 04:30（北京时间）')
+      expect(formatDate('2025-10-20T11:00:00+11:00')).toBe('2025年10月20日 08:00（北京时间）')
+      expect(formatter).toHaveBeenCalledWith('zh-CN', expect.objectContaining({ timeZone: 'Asia/Shanghai' }))
+    } finally {
+      formatter.mockRestore()
+    }
+  },
+)

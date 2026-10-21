@@ -2,7 +2,7 @@
 import Decimal from 'decimal.js'
 import { formatMetric, labels, reasonText, type Finding, type Plan, type ResearchReport } from './api'
 
-export const dimensionLabels: Record<string, string> = { growth: '成长能力', profitability: '盈利能力', valuation: '估值水平', price: '股价表现', quality: '盈利质量与财务韧性', data_quality: '数据质量' }
+export const dimensionLabels: Record<string, string> = { growth: '成长能力', profitability: '盈利能力', valuation: '估值水平', price: '股价表现', manufacturing: '制造业专属证据（待验证）', quality: '盈利质量与财务韧性', data_quality: '数据质量' }
 export const safetyNotice = '本问题涉及投资操作或收益确定性。StockLens 仅提供基于证据的研究信息，不提供买卖建议，也不承诺收益。'
 export const disclaimer = '本报告仅提供研究信息，不构成买卖建议，不承诺收益。年度财务数据不能反映当前交易状况。'
 export const sourceName = (name: string) => name === 'Fuyao' ? 'Fuyao（扶摇）' : '数据来源待核验'
@@ -12,6 +12,7 @@ export function periodText(period: string) {
   return period.replace(/(\d{4}) FY/g, '$1 年度').replace(' vs ', ' 对比 ')
 }
 export function dimensionReason(item: Plan['dimensions'][number]) {
+  if (item.reason.startsWith('公司类型默认关注：') || item.reason.startsWith('公司类型补充关注：')) return item.reason.replace(/growth/g, '成长能力').replace(/profitability/g, '盈利能力').replace(/manufacturing/g, '制造业专属证据（待验证）')
   if (item.reason === 'No specific supported dimension matched; the default annual operating-performance review was selected.') return '未匹配到特定研究维度，默认从成长能力与盈利能力了解年度经营表现。'
   if (item.reason === 'Included as annual financial context alongside historical prices; no causal link is established.') return '作为年度财务背景，与历史价格分别观察；不据此推断财务事件与股价变化之间的因果关系。'
   if (item.reason === 'Included as available annual financial context; it cannot answer the requested unavailable dimension.') return '作为可获取的年度财务背景纳入研究，不能替代所问维度缺失的证据。'
@@ -44,6 +45,7 @@ export function findingCopy(item: Finding, report: ResearchReport): { title: str
     const title = item.category === 'positive' || item.category === 'negative' ? (metric.name === 'net_profit_growth' ? direction.replace('营业收入', '净利润') : direction) : labels[metric.name]
     return { title, text: `${evidence ? periodText(evidence.reporting_period) : '当前报告期'}，${labels[metric.name]}为 ${formatMetric(metric)}。${['positive', 'negative'].includes(item.category) ? '正负方向仅描述本次年度变化，不代表投资价值判断。' : ''}` }
   }
+  if (item.id === 'missing_manufacturing') return { title: '制造业专属指标尚待验证', text: '当前仅提供合并报表通用指标。研发、产能、销量及订单等尚未形成可核验指标，不据此推断分部业绩或竞争优势。' }
   if (item.id === 'divergent_growth') return { title: '营业收入与净利润变化方向不一致', text: '两项年度增长指标呈现不同方向，需要结合观察；现有证据不足以解释差异的成因。' }
   if (item.id.startsWith('missing_') && dimensionLabels[item.dimension]) return { title: `${dimensionLabels[item.dimension]}尚未核验`, text: '当前版本尚未接入该维度的已核验数据，仅凭年度利润表无法回答相关问题。' }
   if (item.id === 'margin_context') return { title: '行业对比与长期表现尚未评估', text: '单一净利润率不足以判断竞争优势、估值或投资适合性；目前缺少同行基准与更长期的比较。' }
@@ -73,7 +75,7 @@ const statuses: Record<string, string> = {
 }
 export const interpretationStatus = (text: string) => statuses[text] ?? '解读状态暂未提供经核验的中文说明，请以客观事实与原始证据为准。'
 const followUps: Record<string, string> = {
-  '贵州茅台过去一个月的股价表现如何？': '贵州茅台过去一个月的股价表现如何？',
+  '过去一个月的股价表现如何？': '过去一个月的股价表现如何？',
   'How did revenue and net profit growth compare?': '营业收入与净利润的同比增长表现有何差异？',
   'What does the reported net profit margin establish?': '已披露的净利润率能说明什么？',
   'What evidence is missing to assess valuation?': '评估估值水平还缺少哪些证据？',

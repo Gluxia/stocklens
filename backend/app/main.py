@@ -11,8 +11,10 @@ from .errors import DiagnosisError
 from .fuyao import FuyaoClient
 from .schemas import Diagnosis
 from .research import ResearchRequest, ResearchReport, make_plan, factual_report, attach_prices
+from .followups import add_followups
 from .llm import add_interpretation
 from .prices import PriceAnalysis, build_prices, price_window
+from .stocks import STOCKS, Stock
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 app = FastAPI(title="StockLens Backend", version="0.1.0")
@@ -32,6 +34,11 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/stocks", response_model=list[Stock])
+def stocks():
+    return STOCKS
+
+
 @app.get("/api/diagnosis", response_model=Diagnosis)
 def diagnosis(stock_code: str, client: FuyaoClient = Depends(get_fuyao_client)):
     validate_stock_code(stock_code)
@@ -41,13 +48,13 @@ def diagnosis(stock_code: str, client: FuyaoClient = Depends(get_fuyao_client)):
 @app.post("/api/plan")
 def plan(request: ResearchRequest):
     validate_stock_code(request.stock_code)
-    return make_plan(request.question)
+    return make_plan(request.question, request.stock_code)
 
 
 @app.post("/api/research", response_model=ResearchReport)
 def research(request: ResearchRequest, client: FuyaoClient = Depends(get_fuyao_client)):
     validate_stock_code(request.stock_code)
-    wants_prices = any(d.id == "price" for d in make_plan(request.question).dimensions)
+    wants_prices = any(d.id == "price" for d in make_plan(request.question, request.stock_code).dimensions)
     try:
         report = build_diagnosis(request.stock_code, client.annual_income_statements(request.stock_code))
     except DiagnosisError as exc:
@@ -63,7 +70,7 @@ def research(request: ResearchRequest, client: FuyaoClient = Depends(get_fuyao_c
         except DiagnosisError as exc:
             prices = PriceAnalysis(requested_start=str(start), requested_end=str(end), error_code=exc.code, issues=[exc.code])
         attach_prices(result, prices)
-    return add_interpretation(result)
+    return add_followups(add_interpretation(result))
 
 
 # Development uses the Vite proxy. Production serves the compiled UI on the same origin.

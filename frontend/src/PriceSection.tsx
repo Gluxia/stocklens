@@ -15,7 +15,7 @@ export default function PriceSection({ prices, inspect }: { prices: PriceAnalysi
   const data = prices.observations.map(o => ({ date: o.date, close: Number(o.close), evidence_ids: o.evidence_ids }))
   return <section className="price-section" aria-label="历史股价分析">
     <div className="section-heading"><h2>历史股价表现</h2><span className="pill">日线 · 不复权 · 人民币元</span></div>
-    <p className="muted">默认范围：过去一个自然月，不含今日未结束日线。请求区间：{prices.requested_start} 至 {prices.requested_end}（上海时区）。暂不解析其他时间范围。</p>
+    <p className="muted">默认范围：过去一个自然月，不含今日未结束日线。请求区间：{prices.requested_start} 至 {prices.requested_end}（北京时间）。暂不解析其他时间范围。</p>
     <p className="muted">实际观测：{prices.actual_start && prices.actual_end ? `${prices.actual_start} 至 ${prices.actual_end}` : '暂无'} · 来源：Fuyao（扶摇）{prices.retrieved_at ? ` · 获取于 ${formatDate(prices.retrieved_at)}` : ''}</p>
     {prices.error_code && <p role="status" className="notice">{issues[prices.error_code] ?? apiErrorText(prices.error_code, 502)}未展示替代价格数据。</p>}
     {prices.issues.length > 0 && <ul className="price-notices">{[...new Set(prices.issues)].map(issue => <li key={issue}>{issues[issue] ?? '数据源暂不可用，请稍后重试。'}</li>)}</ul>}

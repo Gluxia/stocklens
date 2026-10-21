@@ -4,6 +4,10 @@ import Decimal from 'decimal.js'
 const numeric = z.string().refine(value => {
   try { return new Decimal(value).isFinite() } catch { return false }
 }, '无效的十进制数值')
+export const stockCodeSchema = z.enum(['600519.SH', '300750.SZ', '002594.SZ'])
+export type StockCode = z.infer<typeof stockCodeSchema>
+export const stockSchema = z.object({ stock_code: stockCodeSchema, name: z.string(), exchange: z.string(), company_type: z.string(), classification_basis: z.string(), source: z.string(), source_url: z.string().url(), identity_source_url: z.string().url(), default_dimensions: z.array(z.string()) })
+export type Stock = z.infer<typeof stockSchema>
 const status = z.enum(['available', 'unavailable'])
 const evidenceSchema = z.object({
   evidence_id: z.string(), kind: z.enum(['source', 'calculation']), source_id: z.string(),
@@ -14,7 +18,7 @@ const evidenceSchema = z.object({
   status, reason: z.string().nullable(), metadata_json_paths: z.record(z.string(), z.string()),
 })
 export const diagnosisSchema = z.object({
-  stock_code: z.literal('600519.SH'), status: z.enum(['complete', 'partial', 'unavailable']),
+  stock_code: stockCodeSchema, status: z.enum(['complete', 'partial', 'unavailable']),
   current_year: z.number().int().nullable(), previous_year: z.number().int().nullable(),
   calculation_version: z.string(), decimal_precision: z.number(), rounding: z.string(),
   issues: z.array(z.string()),
@@ -26,8 +30,8 @@ export type Diagnosis = z.infer<typeof diagnosisSchema>
 export type Evidence = z.infer<typeof evidenceSchema>
 export type Metric = Diagnosis['metrics'][number]
 
-export async function fetchDiagnosis(signal?: AbortSignal): Promise<Diagnosis> {
-  const response = await fetch('/api/diagnosis?stock_code=600519.SH', { signal, headers: { Accept: 'application/json' } })
+export async function fetchDiagnosis(signal?: AbortSignal, stockCode: StockCode = '600519.SH'): Promise<Diagnosis> {
+  const response = await fetch(`/api/diagnosis?stock_code=${encodeURIComponent(stockCode)}`, { signal, headers: { Accept: 'application/json' } })
   let body: unknown
   try { body = await response.json() } catch { throw new Error('服务响应无法解析，请确认后端服务已启动。') }
   if (!response.ok) {
@@ -36,6 +40,7 @@ export async function fetchDiagnosis(signal?: AbortSignal): Promise<Diagnosis> {
   }
   const parsed = diagnosisSchema.safeParse(body)
   if (!parsed.success) throw new Error('响应未通过财务证据格式校验，本次未展示结果。')
+  if (parsed.data.stock_code !== stockCode || parsed.data.sources.some(s => s.parameters.thscode !== stockCode)) throw new Error('响应股票身份不匹配，本次未展示结果。')
   return parsed.data
 }
 export const labels: Record<string, string> = { revenue_growth: '营业收入同比增长率', net_profit_growth: '净利润同比增长率', net_profit_margin: '净利润率' }
@@ -44,7 +49,7 @@ export function formatMetric(metric: Metric) {
   return `${new Decimal(metric.value).toFixed(2)}${metric.unit === '%' ? '%' : ` ${metric.unit}`}`
 }
 export function formatDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short', timeZoneName: undefined }).format(new Date(value))
+  return `${new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Shanghai' }).format(new Date(value))}（北京时间）`
 }
 const reasons: Record<string, string> = {
   missing_value: '原始字段缺失', invalid_number: '原始数值无效', missing_or_invalid_input: '计算所需数据缺失或无效',
@@ -70,7 +75,7 @@ const errorMessages: Record<string, string> = {
   invalid_response: '数据源响应格式异常，本次未展示财务结果。', invalid_record: '数据源记录无效，请核验原始数据。',
   invalid_reporting_period: '报告期信息未通过核验，本次未进行比较。', stock_mismatch: '数据源股票代码与所选股票不一致。',
   unverified_unit: '数据单位或币种尚未通过核验，本次未展示计算结果。', duplicate_reporting_period: '存在重复报告期，无法确定适用记录。',
-  invalid_stock_code: '股票代码格式无效，请使用 600519.SH。', unsupported_stock: '当前版本仅支持贵州茅台（600519.SH）。',
+  invalid_stock_code: '股票代码格式无效，请使用 600519.SH。', unsupported_stock: '当前支持贵州茅台、宁德时代和比亚迪，请选择其中一家公司。',
 }
 export const apiErrorText = (code: string, status: number) => errorMessages[code] ?? `研究请求未完成（HTTP ${status}），请稍后重试。`
 export function requestErrorText(failure: unknown) {
@@ -92,6 +97,7 @@ export function classify(report: Diagnosis) {
 }
 
 export const planSchema = z.object({
+  stock_code: stockCodeSchema, classification_source: z.string(), classification_source_url: z.string().url(),
   company_name: z.string(), company_type: z.string(), company_type_basis: z.string(), routing_method: z.string(),
   safety_notice: z.string().nullable(),
   dimensions: z.array(z.object({ id: z.string(), label: z.string(), reason: z.string(), availability: z.enum(['available', 'unavailable']) })),
@@ -114,6 +120,8 @@ export const researchSchema = z.object({
   interpretation_mode: z.enum(['llm', 'deterministic']), interpretation_status: z.string(),
   interpretations: z.array(z.object({ id: z.string(), text: z.string(), evidence_ids: z.array(z.string()) })),
   freshness: z.string(), freshness_status: z.enum(['recent_annual_period', 'stale', 'unknown']),
+  follow_up_suggestions: z.array(z.object({ id: z.string(), question: z.string(), dimension: z.string(), availability: z.enum(['supported', 'pending']), stock_code: stockCodeSchema, evidence_ids: z.array(z.string()), reporting_periods: z.array(z.string()) })).max(4).optional(),
+  follow_up_mode: z.enum(['llm', 'deterministic']).optional(),
   follow_up_questions: z.array(z.string()), disclaimer: z.string(),
 }).superRefine((report, context) => {
   const evidence = reportEvidence(report)
@@ -121,7 +129,10 @@ export const researchSchema = z.object({
   const metrics = [...report.diagnosis.metrics, ...(report.price_analysis?.metrics ?? [])]
   const ids = new Set(evidence.map(e => e.evidence_id))
   const sourceIds = new Set(sources.map(s => s.source_id))
-  if (ids.size !== evidence.length || sourceIds.size !== sources.length ||
+  if (report.follow_up_suggestions?.some(s => s.stock_code !== report.diagnosis.stock_code || s.evidence_ids.some(id => !evidence.some(e => e.evidence_id === id && e.status === 'available'))) ||
+      new Set(report.follow_up_suggestions?.map(s => s.id)).size !== (report.follow_up_suggestions?.length ?? 0) ||
+      report.plan.stock_code !== report.diagnosis.stock_code || sources.some(s => s.parameters.thscode !== report.diagnosis.stock_code) ||
+      ids.size !== evidence.length || sourceIds.size !== sources.length ||
       metrics.some(m => !ids.has(m.evidence_id)) ||
       evidence.some(e => !sourceIds.has(e.source_id) || e.input_evidence_ids.some(id => !ids.has(id))) ||
       (report.price_analysis?.observations.some(o => o.evidence_ids.some(id => !ids.has(id))) ?? false) ||
@@ -133,8 +144,8 @@ export type Plan = z.infer<typeof planSchema>
 export type ResearchReport = z.infer<typeof researchSchema>
 export type Finding = z.infer<typeof findingSchema>
 
-async function post<T>(path: string, question: string, schema: z.ZodType<T>, signal: AbortSignal): Promise<T> {
-  const response = await fetch(path, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ stock_code: '600519.SH', question }) })
+async function post<T>(path: string, question: string, schema: z.ZodType<T>, signal: AbortSignal, stockCode: StockCode): Promise<T> {
+  const response = await fetch(path, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ stock_code: stockCode, question }) })
   let body: unknown
   try { body = await response.json() } catch { throw new Error('服务响应无法解析，请确认后端服务已启动。') }
   if (!response.ok) {
@@ -145,5 +156,20 @@ async function post<T>(path: string, question: string, schema: z.ZodType<T>, sig
   if (!parsed.success) throw new Error('响应未通过格式或证据引用校验，本次未展示财务报告。')
   return parsed.data
 }
-export const fetchPlan = (question: string, signal: AbortSignal) => post('/api/plan', question, planSchema, signal)
-export const fetchResearch = (question: string, signal: AbortSignal) => post('/api/research', question, researchSchema, signal)
+export async function fetchPlan(question: string, signal: AbortSignal, stockCode: StockCode = '600519.SH') {
+  const plan = await post('/api/plan', question, planSchema, signal, stockCode)
+  if (plan.stock_code !== stockCode) throw new Error('研究计划股票身份不匹配。')
+  return plan
+}
+export async function fetchResearch(question: string, signal: AbortSignal, stockCode: StockCode = '600519.SH') {
+  const report = await post('/api/research', question, researchSchema, signal, stockCode)
+  if (report.diagnosis.stock_code !== stockCode) throw new Error('响应股票身份不匹配，本次未展示结果。')
+  return report
+}
+export async function fetchStocks(signal: AbortSignal): Promise<Stock[]> {
+  const response = await fetch('/api/stocks', { signal, headers: { Accept: 'application/json' } })
+  if (!response.ok) throw new Error('股票目录暂不可用，请刷新页面重试。')
+  const parsed = z.array(stockSchema).length(3).safeParse(await response.json())
+  if (!parsed.success || new Set(parsed.data.map(s => s.stock_code)).size !== 3) throw new Error('股票目录校验失败。')
+  return parsed.data
+}

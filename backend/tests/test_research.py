@@ -156,7 +156,8 @@ def test_research_journey_and_followup():
             body = response.json()
             assert body['interpretation_mode'] == 'deterministic'
             assert body['diagnosis']['status'] == 'complete'
-            followup = client.post('/api/research', json={'question': body['follow_up_questions'][2]})
+            question = next(s['question'] for s in body['follow_up_suggestions'] if s['dimension'] == 'valuation')
+            followup = client.post('/api/research', json={'question': question})
             assert followup.status_code == 200
             assert any(item['id'] == 'valuation' for item in followup.json()['plan']['dimensions'])
             fake.annual_income_statements.side_effect = DiagnosisError('upstream_timeout', 'Timed out', 504)
