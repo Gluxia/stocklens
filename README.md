@@ -8,7 +8,7 @@ StockLens 是一款证据优先的 A 股研究助手，帮助个人研究者理�
 
 ## 在线体验与核心流程
 
-[Render 在线演示](https://stocklens-bv4o.onrender.com)已发布支持三家公司的 Phase 3。Question Answer Layer 在当前功能分支中完成，尚未部署；公网仍为此前的 Phase 3 版本。在线演示可尝试以下问题：
+[Render 在线演示](https://stocklens-bv4o.onrender.com)已上线包含 Question Answer Layer 的 Phase 3，支持三家公司。PR #5 已合并到 `main`，用户确认 Render 最新部署为 Live，六项公网人工验收通过，详见[验收记录](TESTING.md#public-manual-acceptance)。在线演示可尝试以下问题：
 
 - “贵州茅台的营收和净利润增长表现有何差异？”
 - “贵州茅台过去一个月的股价表现如何？”
@@ -30,7 +30,7 @@ AI 仅在调用和校验成功时显示为 AI 解读；不可用时明确回退�
 
 | 必交要求 | 对应材料 | 内容与状态 |
 | --- | --- | --- |
-| 可访问、可使用的公网 Web 产品 | [在线演示](https://stocklens-bv4o.onrender.com) | Phase 3 已部署；此前链接检查返回 HTTP 200，供应商状态见测试记录 |
+| 可访问、可使用的公网 Web 产品 | [在线演示](https://stocklens-bv4o.onrender.com) | 包含 Answer Layer 的 Phase 3 已上线；用户确认六项公网人工验收通过，验证范围见测试记录 |
 | 公开源码及完整 README | [GitHub 仓库](https://github.com/Gluxia/stocklens)及本文 | 公开仓库；本文提供安装、配置、架构、设计取舍和限制说明 |
 | AI 使用与验证记录 | [AI_USAGE_AND_VALIDATION.md](AI_USAGE_AND_VALIDATION.md#development-assistance-and-documented-human-review) | 区分 Codex 辅助开发、Gemini 运行时行为、人工审阅迭代与具体纠错记录 |
 | 主流程、故障与边界测试 | [TESTING.md](TESTING.md#submission-test-coverage-and-evidence-types) | 记录自动化测试、有限真实调用、公网展示检查及待验收交互 |
@@ -224,7 +224,7 @@ curl --fail http://127.0.0.1:8000/api/health
 
 多阶段镜像构建 React，安装后端运行依赖和时区数据，以非 root 用户运行。`.env` 不进入镜像，密钥仅在运行时注入。无需持久卷，因为 MVP 不保存研究报告。
 
-现有公网地址为 [StockLens on Render](https://stocklens-bv4o.onrender.com)，源码在 [GitHub](https://github.com/Gluxia/stocklens)。当前公网已发布 Phase 3，Question Answer Layer 尚未部署；以下配置说明以仓库中的 `Dockerfile` 和 `render.yaml` 为准。
+现有公网地址为 [StockLens on Render](https://stocklens-bv4o.onrender.com)，源码在 [GitHub](https://github.com/Gluxia/stocklens)。当前公网已上线包含 Question Answer Layer 的 Phase 3；以下配置说明以仓库中的 `Dockerfile` 和 `render.yaml` 为准。
 
 维护或复制部署时：
 
@@ -268,7 +268,7 @@ exec python -m uvicorn backend.app.main:app --host 0.0.0.0 --port "${PORT:-8000}
 
 ## 验证状态与中文展示
 
-Question Answer Layer 最新完整回归为后端 **502 项通过**、前端 **102 项通过**，独立 TypeScript 和生产构建通过。自动化使用合成证据、mock 和 jsdom；本地浏览器已完成初步验收，并发现、修复了局部证据提示及 Explore 过滤问题。本轮发布检查不额外调用真实供应商 API；浏览器反馈不等同于七类问题和三家公司均完成真实端到端验收。历史真实接口、Gemini 成败及凭据检查记录见测试文档。
+Question Answer Layer 发布前完整回归为后端 **502 项通过**、前端 **102 项通过**，独立 TypeScript 和生产构建通过；自动化使用合成证据、mock 和 jsdom。上线后，用户确认主答案、增长比较与证据查看、估值缺口、Explore、三股票隔离及手机窄屏六项人工验收通过。这是用户人工验收，不是自动化 CI，也不代表所有意图与股票组合均完成真实测试。本次仅同步文档，不重跑应用测试或调用供应商接口；历史验证见 [TESTING.md](TESTING.md)。
 
 页面使用 `zh-CN` 和“看清企业经营，追溯每条结论。”。`frontend/src/zh-CN.ts` 仅映射已知计划、发现和解读模板；未知模型文字不会被当作已核验结论翻译。原始字段、路径、公式、ID、用户输入及 JSON 保持原样。显示值用 decimal.js 保留两位小数，证据保留完整精度。
 
