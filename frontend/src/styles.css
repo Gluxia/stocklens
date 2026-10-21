@@ -2266,3 +2266,16 @@ textarea {
   outline-offset: 3px;
   background: var(--brand-subtle);
 }
+
+/* One answer surface for all intents; financial facts retain their own provenance. */
+.question-answer { margin-block: 24px; padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: #fff; min-width: 0; overflow-wrap: anywhere; }
+.question-answer .section-heading { flex-wrap: wrap; gap: 12px; }
+.question-answer h3 { font-size: var(--type-component, 20px); }
+.question-answer h4 { font-size: var(--type-body, 16px); font-weight: 500; margin-block: 16px 6px; }
+.question-answer p, .question-answer li { font-size: var(--type-body, 16px); line-height: 1.7; }
+.question-answer ul { padding-left: 22px; }
+.question-answer .answer-scope p { font-size: var(--type-meta, 14px); color: var(--text-secondary, #667085); }
+.answer-evidence { margin-top: 16px; padding: 8px 14px; border: 1px solid #F2B6C0; border-radius: 8px; color: var(--brand-hover); background: #fff; max-width: 100%; }
+.answer-evidence:hover { background: var(--brand-subtle); }
+.answer-evidence:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+@media (max-width: 600px) { .question-answer { padding: 16px; } }

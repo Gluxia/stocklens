@@ -13,12 +13,13 @@ const issues: Record<string, string> = {
 export default function PriceSection({ prices, inspect }: { prices: PriceAnalysis; inspect: (ids: string[], title: string) => void }) {
   // Conversion to Number is chart-only; source evidence retains full decimal precision.
   const data = prices.observations.map(o => ({ date: o.date, close: Number(o.close), evidence_ids: o.evidence_ids }))
+  const additionalIssues = [...new Set(prices.issues)].filter(issue => issue !== prices.error_code)
   return <section className="price-section" aria-label="历史股价分析">
     <div className="section-heading"><h2>历史股价表现</h2><span className="pill">日线 · 不复权 · 人民币元</span></div>
     <p className="muted">默认范围：过去一个自然月，不含今日未结束日线。请求区间：{prices.requested_start} 至 {prices.requested_end}（北京时间）。暂不解析其他时间范围。</p>
     <p className="muted">实际观测：{prices.actual_start && prices.actual_end ? `${prices.actual_start} 至 ${prices.actual_end}` : '暂无'} · 来源：Fuyao（扶摇）{prices.retrieved_at ? ` · 获取于 ${formatDate(prices.retrieved_at)}` : ''}</p>
     {prices.error_code && <p role="status" className="notice">{issues[prices.error_code] ?? apiErrorText(prices.error_code, 502)}未展示替代价格数据。</p>}
-    {prices.issues.length > 0 && <ul className="price-notices">{[...new Set(prices.issues)].map(issue => <li key={issue}>{issues[issue] ?? '数据源暂不可用，请稍后重试。'}</li>)}</ul>}
+    {additionalIssues.length > 0 && <ul className="price-notices">{additionalIssues.map(issue => <li key={issue}>{issues[issue] ?? '数据源暂不可用，请稍后重试。'}</li>)}</ul>}
     {data.length ? <>
       <div className="price-chart" role="img" aria-label="历史收盘价折线图，具体数值可在下方价格记录中核验"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 20, bottom: 8, left: 10 }}><CartesianGrid stroke="#E5E8EF" strokeDasharray="3 3" /><XAxis dataKey="date" tick={{ fontSize: 13 }} minTickGap={38} /><YAxis domain={['auto', 'auto']} tick={{ fontSize: 13 }} width={72} /><Tooltip formatter={value => [`${new Decimal(String(value)).toFixed(2)} 元`, '收盘价']} /><Line type="linear" dataKey="close" name="收盘价" stroke="#C92339" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} /></LineChart></ResponsiveContainer></div>
       <div className="metric-grid price-metrics">{prices.metrics.map(m => <button key={m.name} className="metric-card" onClick={() => inspect([m.evidence_id], labels[m.name])}><span>{labels[m.name]}</span><strong>{m.value !== null && m.status === 'available' ? `${new Decimal(m.value).toFixed(m.name === 'price_count' ? 0 : 2)}${m.unit === '%' ? '%' : m.unit === 'observations' ? ' 条' : ' 元'}` : '暂不可用'}</strong><p>点击核验原始数值与计算公式</p></button>)}</div>

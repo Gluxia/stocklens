@@ -76,7 +76,7 @@ describe('Research journey', () => {
     const empty = structuredClone(fixture)
     empty.diagnosis.metrics = []; empty.diagnosis.evidence = []; empty.diagnosis.status = 'unavailable'; empty.findings = []; empty.observations = []
     mockJourney(empty); render(<App />); await start()
-    expect(await screen.findByText('未返回证据记录，暂时无法核验来源。')).toBeInTheDocument()
+    expect(await screen.findByText('本轮暂无可供钻取的财务或行情证据。缺失或未支持的研究内容请查看对应说明。')).toBeInTheDocument()
     expect(screen.getAllByText('暂不可用')).toHaveLength(3)
     expect(screen.queryByText('20.00%')).not.toBeInTheDocument()
   })
@@ -235,6 +235,7 @@ describe('Historical price research', () => {
     report.findings = fixture.findings
     mockJourney(report); render(<App />); await start()
     expect(await screen.findByText('暂无通过核验的历史价格，不生成价格图表。')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: '历史股价分析' })).queryByRole('list')).not.toBeInTheDocument()
     expect(screen.queryByRole('img', { name: /历史收盘价折线图/ })).not.toBeInTheDocument()
     expect(screen.getByText('20.00%')).toBeInTheDocument()
   })
@@ -464,4 +465,242 @@ it('rejects follow-up suggestions with foreign stock or invalid evidence', () =>
   report.follow_up_suggestions[0].stock_code = '300750.SZ'
   report.follow_up_suggestions[0].evidence_ids = ['foreign-evidence']
   expect(researchSchema.safeParse(report).success).toBe(false)
+})
+
+// Answer fixtures test presentation and references, not new financial calculations.
+const answerIntents = ['price_performance', 'growth_comparison', 'margin_meaning', 'valuation_evidence_gap', 'cashflow_support', 'manufacturing_evidence_gap', 'price_causality', 'unsupported'] as const
+function answeredReport(intent: typeof answerIntents[number] = 'growth_comparison', code: '600519.SH' | '300750.SZ' | '002594.SZ' = '600519.SH'): ResearchReport {
+  const price = ['price_performance', 'price_causality'].includes(intent)
+  const report = structuredClone(price ? priceReport() : reportForStock(code))
+  report.diagnosis.sources.forEach(source => { source.parameters.thscode = code })
+  report.price_analysis?.sources.forEach(source => { source.parameters.thscode = code })
+  const supported = ['growth_comparison', 'margin_meaning', 'valuation_evidence_gap'].includes(intent)
+  const gapOnly = ['valuation_evidence_gap', 'cashflow_support', 'manufacturing_evidence_gap', 'unsupported'].includes(intent)
+  report.answer = {
+    intent_id: intent, answer_status: supported ? 'answered' : price ? 'partial' : 'unavailable',
+    direct_answer: `本轮确定性主答案：${intent}。`,
+    supporting_evidence_ids: gapOnly ? [] : [price ? 'price-return' : 'metric-1'],
+    missing_evidence: gapOnly || price ? [{ code: 'test_gap', description: '尚缺经核验的相关证据，不能作出进一步判断。', reason: 'unverified' }] : [],
+    scope: { stock_code: code, reporting_periods: price || gapOnly ? [] : ['2024 FY vs 2023 FY'],
+      price_requested_start: price ? '2025-09-20' : null, price_requested_end: price ? '2025-10-19' : null,
+      price_observed_start: price ? '2025-09-22' : null, price_observed_end: price ? '2025-10-17' : null,
+      time_zone: 'Asia/Shanghai', assumptions: ['仅解释本轮证据，不构成因果判断或投资建议。'] },
+  }
+  return report
+}
+
+describe('Unified question answers', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: (entries: { contentRect: { width: number; height: number } }[]) => void) {}
+      observe() { this.callback([{ contentRect: { width: 800, height: 300 } }]) }
+      unobserve() {} disconnect() {}
+    })
+  })
+  it.each(answerIntents)('puts %s before all financial and price context', async intent => {
+    const report = answeredReport(intent)
+    expect(researchSchema.safeParse(report).error?.issues).toBeUndefined()
+    mockJourney(report); render(<App />); await start()
+    const answer = await screen.findByRole('region', { name: '针对你的问题' })
+    expect(within(answer).getByText(report.answer!.direct_answer)).toBeVisible()
+    const financial = screen.getByRole('region', { name: '年度财务分析', hidden: true })
+    expect(answer.compareDocumentPosition(financial) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const details = financial.closest('details')
+    if (['growth_comparison', 'margin_meaning'].includes(intent)) expect(details).toBeNull()
+    else expect(details).not.toHaveAttribute('open')
+    expect(screen.getByText('补充研究解读').closest('details')).not.toHaveAttribute('open')
+    for (const label of ['正面证据', '负面证据', '矛盾与混合证据', '未知与待验证信息']) expect(screen.getByRole('heading', { name: label })).toBeInTheDocument()
+    if (intent.startsWith('price_')) {
+      const chart = screen.getByRole('heading', { name: '历史股价表现' })
+      expect(chart.closest('details')).toBeNull()
+      expect(answer.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(within(answer).getByText(/实际有效观测区间：/)).toHaveTextContent('北京时间')
+    }
+  })
+  it.each(['answered', 'partial', 'unavailable'] as const)('shows independent answer status %s', async status => {
+    const report = answeredReport(status === 'answered' ? 'growth_comparison' : status === 'partial' ? 'price_performance' : 'cashflow_support')
+    report.diagnosis.status = 'complete'
+    mockJourney(report); render(<App />); await start()
+    const region = await screen.findByRole('region', { name: '针对你的问题' })
+    expect(within(region).getByText({ answered: '已回答', partial: '部分回答', unavailable: '暂无法回答' }[status])).toBeVisible()
+    if (status !== 'answered') expect(within(region).getByRole('heading', { name: '尚缺的证据' })).toBeVisible()
+  })
+  it('opens real answer evidence and restores keyboard focus', async () => {
+    mockJourney(answeredReport()); render(<App />); const user = await start()
+    const button = await screen.findByRole('button', { name: '查看依据' })
+    button.focus(); await user.keyboard('{Enter}')
+    expect(within(screen.getByRole('dialog')).getByText('metric-1')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '关闭证据面板' }))
+    expect(button).toHaveFocus()
+  })
+  it('shows gaps without an empty evidence action', async () => {
+    mockJourney(answeredReport('cashflow_support')); render(<App />); await start()
+    const region = await screen.findByRole('region', { name: '针对你的问题' })
+    expect(within(region).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+  it.each([undefined, null])('supports legacy answer value %s', async answer => {
+    const report = structuredClone(fixture); report.answer = answer
+    mockJourney(report); render(<App />); await start()
+    expect(await screen.findByText('20.00%')).toBeVisible()
+    expect(screen.queryByRole('region', { name: '针对你的问题' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '研究解读' })).toBeVisible()
+  })
+  it('keeps Gemini output supplementary without changing it', async () => {
+    const report = answeredReport('cashflow_support'); report.interpretation_mode = 'llm'
+    report.interpretations = [{ id: 'test', text: '年度背景解读', evidence_ids: ['metric-1'] }]
+    mockJourney(report); render(<App />); const user = await start()
+    await screen.findByRole('region', { name: '针对你的问题' })
+    const details = screen.getByText('补充研究解读').closest('details')!
+    expect(details).not.toHaveAttribute('open')
+    await user.click(screen.getByText('补充研究解读'))
+    expect(details).toHaveAttribute('open')
+    expect(screen.getByText('AI 选取 · 证据已核验')).toBeVisible()
+  })
+  it.each(['600519.SH', '300750.SZ', '002594.SZ'] as const)('clears answers and drawer, and explores with current stock %s', async code => {
+    render(<App />); const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByLabelText('选择股票')).toBeEnabled())
+    await user.selectOptions(screen.getByLabelText('选择股票'), code)
+    mockJourney(answeredReport('growth_comparison', code)); await start()
+    await user.click(await screen.findByRole('button', { name: '查看依据' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '关闭证据面板' }))
+    const next = answeredReport('valuation_evidence_gap', code); mockJourney(next)
+    await user.click(screen.getAllByRole('button', { name: '评估估值水平还缺少哪些证据？' }).at(-1)!)
+    expect(await screen.findByText(next.answer!.direct_answer)).toBeVisible()
+    expect(screen.queryByText('本轮确定性主答案：growth_comparison。')).not.toBeInTheDocument()
+    expect(JSON.parse(mockFetch.mock.calls[3][1].body).stock_code).toBe(code)
+    await user.selectOptions(screen.getByLabelText('选择股票'), code === '600519.SH' ? '300750.SZ' : '600519.SH')
+    expect(screen.queryByRole('region', { name: '针对你的问题' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+  it('rejects a broken answer before displaying any report', async () => {
+    const report = answeredReport(); report.answer!.supporting_evidence_ids = ['invented']
+    mockJourney(report); render(<App />); await start()
+    expect(await screen.findByRole('alert')).toHaveTextContent('响应未通过格式或证据引用校验')
+    expect(screen.queryByRole('region', { name: '针对你的问题' })).not.toBeInTheDocument()
+  })
+  it('scopes financial failures without hiding available price evidence', async () => {
+    const report = answeredReport('price_performance')
+    Object.assign(report.diagnosis, { status: 'unavailable', current_year: null, previous_year: null, metrics: [], evidence: [], sources: [], issues: ['upstream_timeout'] })
+    report.findings = report.findings.filter(item => item.dimension === 'price'); report.observations = []
+    mockJourney(report); render(<App />); const user = await start()
+    await screen.findByRole('region', { name: '针对你的问题' })
+    expect(screen.queryByText(/本轮暂无可供钻取/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/未返回证据记录/)).not.toBeInTheDocument()
+    expect(screen.getByText('年度财务数据说明（1）')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看依据' }))
+    expect(within(screen.getByRole('dialog')).getByText('price-return')).toBeInTheDocument()
+  })
+  it('does not treat unsupported answer dimensions as global evidence failures', async () => {
+    const report = answeredReport('cashflow_support'); report.diagnosis.issues = []
+    mockJourney(report); render(<App />); const user = await start()
+    const answer = await screen.findByRole('region', { name: '针对你的问题' })
+    expect(within(answer).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByText(/本轮暂无可供钻取|未返回证据记录|年度财务数据说明/)).not.toBeInTheDocument()
+    await user.click(screen.getByText('补充财务背景'))
+    await user.click(screen.getByRole('button', { name: /营业收入同比增长率 20.00%/ }))
+    expect(within(screen.getByRole('dialog')).getByText('metric-1')).toBeInTheDocument()
+  })
+  it('opens price answer inputs with full original precision', async () => {
+    mockJourney(answeredReport('price_causality')); render(<App />); const user = await start()
+    await user.click(await screen.findByRole('button', { name: '查看依据' }))
+    const drawer = screen.getByRole('dialog')
+    expect(within(drawer).getByText('10.123456789')).toBeInTheDocument()
+    expect(within(drawer).getByText('(end_close / start_close - 1) * 100')).toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: /close_price.*110.123456789/ }))
+    expect(within(drawer).getByText('$.data.item[1].close_price')).toBeInTheDocument()
+  })
+  it('closes an open answer drawer when changing company', async () => {
+    mockJourney(answeredReport()); render(<App />); const user = await start()
+    await user.click(await screen.findByRole('button', { name: '查看依据' }))
+    await user.selectOptions(screen.getByLabelText('选择股票'), '002594.SZ')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '针对你的问题' })).not.toBeInTheDocument()
+  })
+  it('offers financial comparison without a pending label after a price-causality evidence gap', async () => {
+    const first = answeredReport('price_causality')
+    Object.assign(first.diagnosis, { status: 'unavailable', current_year: null, previous_year: null, metrics: [], evidence: [], sources: [], issues: ['upstream_timeout'] })
+    first.findings = first.findings.filter(item => item.dimension === 'price'); first.observations = []
+    first.follow_up_suggestions = [{ id: 'annual_comparison', question: '年度营业收入与净利润的增长表现有何差异？', dimension: 'growth', availability: 'supported', stock_code: '600519.SH', evidence_ids: [], reporting_periods: [] }]
+    mockJourney(first); render(<App />); const user = await start()
+    const followup = await screen.findByRole('button', { name: '年度营业收入与净利润的增长表现有何差异？' })
+    expect(followup).not.toHaveTextContent('待验证')
+    expect(screen.getByText(/结果视数据而定/)).toBeInTheDocument()
+    const second = answeredReport('growth_comparison'); mockJourney(second)
+    await user.click(followup)
+    expect(await screen.findByText(second.answer!.direct_answer)).toBeVisible()
+    expect(screen.queryByText(first.answer!.direct_answer)).not.toBeInTheDocument()
+    expect(JSON.parse(mockFetch.mock.calls[3][1].body)).toEqual({ stock_code: '600519.SH', question: first.follow_up_suggestions[0].question })
+    await user.click(screen.getByRole('button', { name: '查看依据' }))
+    expect(within(screen.getByRole('dialog')).getByText('metric-1')).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog')).queryByText('price-return')).not.toBeInTheDocument()
+  })
+  it('retains supported financial followups after a price timeout without a fabricated chart', async () => {
+    const report = answeredReport('price_causality')
+    Object.assign(report.price_analysis!, { status: 'unavailable', observations: [], metrics: [], evidence: [], sources: [], actual_start: null, actual_end: null, error_code: 'upstream_timeout', issues: ['upstream_timeout', 'upstream_timeout'] })
+    report.answer!.answer_status = 'unavailable'; report.answer!.supporting_evidence_ids = []
+    report.answer!.direct_answer = '本轮行情请求超时，无法核验价格变化或解释原因。'
+    report.answer!.scope.price_observed_start = null; report.answer!.scope.price_observed_end = null
+    report.findings = fixture.findings
+    report.follow_up_suggestions = [
+      { id: 'annual_comparison', question: '年度营业收入与净利润的增长表现有何差异？', dimension: 'growth', availability: 'supported', stock_code: '600519.SH', evidence_ids: [], reporting_periods: [] },
+      { id: 'margin_limits', question: '怎样理解这家公司的盈利能力，净利润率不能说明哪些问题？', dimension: 'profitability', availability: 'supported', stock_code: '600519.SH', evidence_ids: [], reporting_periods: [] },
+    ]
+    mockJourney(report); render(<App />); const user = await start()
+    expect(await screen.findByText(report.answer!.direct_answer)).toBeVisible()
+    const price = screen.getByRole('region', { name: '历史股价分析' })
+    expect(within(price).getByRole('status')).toHaveTextContent('Fuyao 数据请求超时')
+    expect(within(price).queryByRole('list')).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /历史收盘价折线图/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: report.follow_up_suggestions[1].question })).not.toHaveTextContent('待验证')
+    const next = answeredReport('growth_comparison'); mockJourney(next)
+    await user.click(screen.getByRole('button', { name: report.follow_up_suggestions[0].question }))
+    expect(await screen.findByText(next.answer!.direct_answer)).toBeVisible()
+    expect(JSON.parse(mockFetch.mock.calls[3][1].body).stock_code).toBe('600519.SH')
+  })
+  it('ignores a late answer from another stock', async () => {
+    let resolveOld!: (value: unknown) => void
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => fixture.plan }).mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+    render(<App />); const user = await start()
+    await user.selectOptions(screen.getByLabelText('选择股票'), '300750.SZ')
+    const next = answeredReport('margin_meaning', '300750.SZ'); mockJourney(next)
+    await user.type(screen.getByLabelText('研究问题'), '净利润率能说明什么？'); await user.click(screen.getByRole('button', { name: '开始研究' }))
+    await screen.findByText(next.answer!.direct_answer)
+    await act(async () => resolveOld({ ok: true, json: async () => answeredReport() }))
+    expect(screen.getByText(next.answer!.direct_answer)).toBeVisible()
+    expect(screen.queryByText('本轮确定性主答案：growth_comparison。')).not.toBeInTheDocument()
+  })
+})
+
+describe('Answer contract and evidence validation', () => {
+  it.each(['missing', 'unavailable', 'input_unavailable', 'cycle', 'foreign_scope', 'foreign_source', 'duplicate', 'blank', 'endpoint', 'timestamp'])( 'rejects %s references', kind => {
+    const report = answeredReport()
+    if (kind === 'missing') report.answer!.supporting_evidence_ids = ['invented']
+    if (kind === 'unavailable') report.diagnosis.evidence[0].status = 'unavailable'
+    if (kind === 'input_unavailable') report.diagnosis.evidence[1].status = 'unavailable'
+    if (kind === 'cycle') report.diagnosis.evidence[1].input_evidence_ids = ['metric-1']
+    if (kind === 'foreign_scope') report.answer!.scope.stock_code = '300750.SZ'
+    if (kind === 'foreign_source') report.diagnosis.sources[0].parameters.thscode = '300750.SZ'
+    if (kind === 'duplicate') report.answer!.supporting_evidence_ids.push('metric-1')
+    if (kind === 'blank') report.answer!.supporting_evidence_ids = [' ']
+    if (kind === 'endpoint') report.diagnosis.evidence[0].endpoint = 'https://example.test/other'
+    if (kind === 'timestamp') report.diagnosis.evidence[0].retrieved_at = '2025-10-21T00:00:00Z'
+    expect(researchSchema.safeParse(report).success).toBe(false)
+  })
+  it.each(['intent', 'status', 'text', 'gap', 'date', 'order', 'pair', 'range', 'zone', 'extra'])('rejects malformed %s', kind => {
+    const report = answeredReport('price_performance')
+    const answer = report.answer! as unknown as Record<string, unknown>
+    if (kind === 'intent') answer.intent_id = 'invented'
+    if (kind === 'status') answer.answer_status = 'complete'
+    if (kind === 'text') answer.direct_answer = ' '
+    if (kind === 'gap') answer.missing_evidence = []
+    if (kind === 'date') report.answer!.scope.price_requested_start = '2025-02-30'
+    if (kind === 'order') report.answer!.scope.price_requested_start = '2026-01-01'
+    if (kind === 'pair') report.answer!.scope.price_requested_end = null
+    if (kind === 'range') report.answer!.scope.price_observed_end = '2026-01-01'
+    if (kind === 'zone') answer.scope = { ...report.answer!.scope, time_zone: 'Australia/Sydney' }
+    if (kind === 'extra') answer.unreviewed_field = 'extra'
+    expect(researchSchema.safeParse(report).success).toBe(false)
+  })
 })
