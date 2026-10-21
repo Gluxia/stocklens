@@ -75,7 +75,7 @@ def test_full_research_and_followup_keep_stock_and_source_identity(code):
         assert body['interpretation_mode']=='deterministic'
         if body['price_analysis']:
             assert len(body['price_analysis']['observations'])==2
-            assert body['follow_up_suggestions'][0]['id']=='price_coverage'
+            assert body['follow_up_suggestions'][0]['id']=='annual_comparison'
             assert question not in body['follow_up_questions']
     followup=client.post('/api/research',json={'stock_code':code,'question':body['follow_up_questions'][0]})
     assert followup.status_code==200 and followup.json()['diagnosis']['stock_code']==code

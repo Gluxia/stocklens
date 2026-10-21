@@ -10,7 +10,7 @@ import requests
 from pydantic import BaseModel
 from typing import Literal
 
-from .research import ResearchReport, verify_report_stock, DIMENSIONS
+from .research import ResearchReport, verify_report_stock
 from .stocks import get_stock
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,30 @@ def normalized(question, stock):
     return ''.join(c for c in text if c.isalnum())
 
 
+def question_topics(question: str) -> set[str]:
+    """Conservative topic rules complement wording similarity, without model generation."""
+    text = unicodedata.normalize('NFKC', question).casefold()
+    has = lambda terms: any(term in text for term in terms)
+    topics = set()
+    if has(('股价', '行情', '价格', 'price', 'stock performance', '走势', '涨跌')):
+        topics.add('price_performance')
+    if has(('最高', '最低', '高低', '波动范围', '价格范围', 'highest', 'lowest', 'price range', 'trading range')):
+        topics.add('price_bounds')
+    if has(('净利润率', '净利率', '利润率', '盈利能力', '盈利水平', '利润占收入', '利润占营收', '利润占营业收入', 'margin', 'profitability')):
+        topics.add('margin_limits')
+    revenue = has(('营收', '收入', 'revenue', 'sales'))
+    profit = has(('利润', '盈利', '净利', 'profit', 'earnings'))
+    if revenue and profit and ('margin_limits' not in topics or has(('同比', '增长', '增速', 'growth'))):
+        topics.add('annual_comparison')
+    if has(('现金流', '现金创造', 'cash flow', 'cash-flow', 'cashflow')):
+        topics.add('cashflow_gap')
+    if has(('估值', '市盈率', '市净率', 'valuation', 'p/e', 'cheap', 'expensive')):
+        topics.add('valuation_gap')
+    if has(('研发', '产能', '销量', '订单', 'r&d', 'capacity', 'deliveries', 'production')):
+        topics.add('manufacturing_gap')
+    return topics
+
+
 def candidates(report: ResearchReport) -> list[FollowUp]:
     verify_report_stock(report)
     stock = get_stock(report.diagnosis.stock_code)
@@ -48,34 +72,44 @@ def candidates(report: ResearchReport) -> list[FollowUp]:
             availability='supported' if available else 'pending', stock_code=stock.stock_code,
             evidence_ids=refs, reporting_periods=list(dict.fromkeys(evidence[ref].reporting_period for ref in refs))))
 
-    add('price_coverage', '本次股价观测区间与请求区间有何区别，交易日覆盖还缺哪些验证？', 'price', ('price_count',))
-    add('price_return_basis', '本次股价区间涨跌幅如何由首尾收盘价计算，是否包含分红？', 'price', ('price_return',))
-    add('price_bounds', '本次股价观测区间的最高价与最低价分别依据哪些日线？', 'price', ('price_high', 'price_low'))
-    add('annual_comparison', '同一年度区间的营业收入与净利润同比增长表现有何差异？', 'growth', ('revenue_growth', 'net_profit_growth'))
-    add('margin_limits', '年度净利润率反映什么，为什么不能据此判断现金流质量？', 'profitability', ('net_profit_margin',))
-    add('period_boundaries', '年度营收与近期股价分别对应哪些期间，为什么不能直接判断因果？', 'price', ('revenue_growth', 'price_return'))
-    add('valuation_gap', '核验估值水平还需要补充哪些数据？', 'valuation', implemented=False)
-    add('cashflow_gap', '核验现金流质量还需要哪些报表？', 'quality', implemented=False)
+    # A supported new price inquiry uses the existing adapter on click, not cached price claims.
+    add('price_performance', '过去一个月的股价表现如何？', 'price')
+    add('annual_comparison', '年度营业收入与净利润的增长表现有何差异？', 'growth', ('revenue_growth', 'net_profit_growth'))
+    add('margin_limits', '怎样理解这家公司的盈利能力，净利润率不能说明哪些问题？', 'profitability', ('net_profit_margin',))
+    add('cashflow_gap', '经营现金流能否支持账面利润？', 'quality', implemented=False)
+    add('valuation_gap', '当前估值水平是否合理，还缺少哪些数据？', 'valuation', implemented=False)
     if 'manufacturing' in stock.default_dimensions:
-        add('manufacturing_gap', '核验研发与产能表现还缺少哪些制造业数据？', 'manufacturing', implemented=False)
+        add('manufacturing_gap', '研发投入和产能利用情况如何？', 'manufacturing', implemented=False)
 
-    text = report.question.casefold()
-    explicit = {key for key, (_, words, _) in DIMENSIONS.items() if any(w in text for w in words)}
-    price_focus = 'price' in explicit
-    combined = price_focus and bool(explicit & {'growth', 'profitability'})
+    topics = question_topics(report.question)
     unknown = {f.dimension for f in report.findings if f.kind == 'limitation'}
-    mixed = any(f.category == 'mixed' for f in report.findings)
-    priority = (['period_boundaries', 'price_coverage', 'annual_comparison'] if combined else
-                ['price_coverage', 'price_return_basis', 'price_bounds'] if price_focus else
-                ['annual_comparison', 'margin_limits'])
-    if mixed and not price_focus:
-        priority.insert(0, 'annual_comparison')
+    if 'price_performance' in topics:
+        priority = ['annual_comparison', 'margin_limits']
+    elif 'margin_limits' in topics:
+        priority = ['annual_comparison', 'price_performance']
+    else:
+        priority = ['margin_limits', 'annual_comparison', 'price_performance']
+    # Missing industry data remains an optional next step, never the primary research task.
+    pending_priority = ['manufacturing_gap', 'cashflow_gap', 'valuation_gap'] if 'manufacturing' in stock.default_dimensions else ['cashflow_gap', 'valuation_gap']
+    priority += pending_priority
+    # Do not send the user back to answers already visible in this report.
+    answered = set()
+    if report.price_analysis and report.price_analysis.observations and 'price_return' in metrics:
+        answered.add('price_performance')
+    for candidate_id, interpretation_id in (('annual_comparison', 'interpret_growth_comparison'), ('margin_limits', 'interpret_margin')):
+        candidate = next(c for c in result if c.id == candidate_id)
+        if candidate.evidence_ids and any(item.id == interpretation_id and set(candidate.evidence_ids) <= set(item.evidence_ids) for item in report.interpretations):
+            answered.add(candidate_id)
+    margin = next(c for c in result if c.id == 'margin_limits')
+    if margin.evidence_ids and any(f.id == 'margin_context' and set(margin.evidence_ids) <= set(f.evidence_ids) for f in report.findings):
+        answered.add('margin_limits')
+    comparison = next(c for c in result if c.id == 'annual_comparison')
+    if comparison.evidence_ids and any(f.id == 'divergent_growth' and set(comparison.evidence_ids) <= set(f.evidence_ids) for f in report.findings):
+        answered.add('annual_comparison')
     original = normalized(report.question, stock)
     filtered = []
     for item in result:
-        if item.dimension == 'price' and 'price' not in {d.id for d in report.plan.dimensions}:
-            continue
-        if item.id == 'annual_comparison' and explicit >= {'growth', 'profitability'} and any(word in text for word in ('差异', '比较', '区别', 'compare', 'difference')):
+        if item.id in topics or item.id in answered:
             continue
         question = normalized(item.question, stock)
         if question == original or SequenceMatcher(None, original, question, autojunk=False).ratio() >= .72:
@@ -83,8 +117,12 @@ def candidates(report: ResearchReport) -> list[FollowUp]:
         if any(normalized(prior.question, stock) == question for prior in filtered):
             continue
         filtered.append(item)
-    return sorted(filtered, key=lambda c: (priority.index(c.id) if c.id in priority else 10,
-        c.availability != 'supported', c.dimension not in unknown))
+    ordered = sorted(filtered, key=lambda c: (c.availability != 'supported',
+        priority.index(c.id) if c.id in priority else 10, c.dimension not in unknown))
+    # Keep unavailable research supplementary: at most one pending topic in the model catalog too.
+    supported = [c for c in ordered if c.availability == 'supported']
+    pending = [c for c in ordered if c.availability == 'pending']
+    return supported + pending[:1]
 
 
 def validate_ids(content, catalog):
@@ -133,7 +171,11 @@ def add_followups(report: ResearchReport) -> ResearchReport:
             choice = response.json()['choices'][0]
             if choice.get('finish_reason') != 'stop' or choice['message'].get('refusal'):
                 raise ValueError('incomplete_output')
-            selected = validate_ids(choice['message']['content'], catalog)
+            ranked = validate_ids(choice['message']['content'], catalog)
+            ranked.sort(key=lambda item: item.availability != 'supported')
+            if any(item.availability == 'supported' for item in catalog) and all(item.availability == 'pending' for item in ranked):
+                raise ValueError('pending_only_selection')
+            selected = ranked
             report.follow_up_mode = 'llm'
         except (requests.RequestException, ValueError, KeyError, IndexError, TypeError, AttributeError):
             status = response.status_code if response is not None and type(response.status_code) is int else None
